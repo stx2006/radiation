@@ -1,145 +1,14 @@
-import math
-import time
 import warnings
-from dataclasses import dataclass
 import numpy as np
-import scipy.signal as sgl
-from scipy.optimize import fsolve
 import matplotlib.pyplot as plt
-
-
-# 测向站设置
-@dataclass
-class StationConfig:
-    x: int | float = 0  # x 坐标
-    y: int | float = 0  # y 坐标
-    angle: int | float = 0  # 角度
-    n: int = 8  # 阵列单元数(8-16)
-    d: int | float = 6  # 阵列间距(半波长6m)
-    sample_rate: int | float = 100_000  # 采样频率(Hz)
-    t: int | float = 0.05  # 采样时间(s)
-
-
-# 辐射源数据
-@dataclass
-class SourceData(object):
-    x: int | float = 0
-    y: int | float = 0
-    a: int | float = 0
-    f: int | float = 0
-
-
-# 辐射源
-class Source:
-    def __init__(self, x, y, speed, initial_amplitude=0.5, initial_frequency=25e6, x1=0, y1=0, a1=0, x2=0, y2=0, a2=0):
-        self.speed = speed  # m/s (5 - 60 km/h 转换为 m/s)
-        self.x = x  # x坐标
-        self.y = y  # y坐标
-        self.amplitude = initial_amplitude  # 初始辐射波幅度
-        self.frequency = initial_frequency  # 初始辐射波频率
-        self.time = 0  # 记录时间
-        self.x1 = x1
-        self.y1 = y1
-        self.a1 = a1
-        self.x2 = x2
-        self.y2 = y2
-        self.a2 = a2
-
-    # 产生辐射
-    def generate_radiation(self):
-        # 更新幅度和频率
-        # 这里我们假设幅度和频率随时间呈正弦变化
-        self.amplitude = self.amplitude + 0.2 * np.sin(0.1 * self.time)
-        # 让频率在 25MHz 左右的 40kHz 内变化
-        frequency_range = 40e3
-        self.frequency = self.frequency + 0.5 * frequency_range * np.sin(0.2 * self.time)  # 你需要实现的部分
-
-        return self.amplitude, self.frequency
-
-    # 解算角度
-    def calculate_position(self, theta1, theta2):
-        # 计算从基站 1 到辐射源的射线的角度
-        ray_angle_1 = self.a1 - theta1
-        # 计算从基站 2 到辐射源的射线的角度
-        ray_angle_2 = self.a2 - theta2
-
-        # 两条射线的斜率
-        m1 = math.tan(ray_angle_1)
-        m2 = math.tan(ray_angle_2)
-
-        # 两条射线的截距
-        c1 = self.y1 - m1 * self.x1
-        c2 = self.y2 - m2 * self.x2
-
-        # 检查两条射线是否平行
-        if math.isclose(m1, m2):
-            print("两条射线平行，无法计算交点。")
-            return None, None
-
-        # 计算交点的 x 坐标
-        x = (c2 - c1) / (m1 - m2)
-        # 计算交点的 y 坐标
-        y = m1 * x + c1
-
-        self.x = x
-        self.y = y
-
-        return self.x, self.y
-
-
-# 辐射源仿真器
-class SourceSimulator(object):
-    def __init__(self):
-        self.sources = []  # 辐射源列表
-        self.x = []  # 辐射源x坐标
-        self.y = []  # 辐射源y坐标
-        self.motion_types = []  # 每个辐射源的运动类型
-        self.speeds = []  # 每个辐射源的速度
-        self.radii = []  # 每个辐射源的半径（如果是圆周运动）
-        self.time = 0  # 当前时间
-
-    # 更新辐射源位置
-    def update_position(self, dt):
-        """更新dt秒后的位置、幅度和频率"""
-        # 更新时间
-        self.time += dt
-
-        new_x = []
-        new_y = []
-        for i in range(len(self.sources)):
-            motion_type = self.motion_types[i]
-            speed = self.speeds[i]
-            if motion_type == 'linear':
-                # 假设x方向运动
-                new_x_i = self.x[i] + speed * dt
-                new_y_i = self.y[i]
-            elif motion_type == 'circular':
-                radius = self.radii[i]
-                # 圆弧运动实现
-                omega = speed / radius
-                # 计算新的x和y坐标，不依赖self.thetas
-                delta_theta = omega * dt
-                cos_delta_theta = np.cos(delta_theta)
-                sin_delta_theta = np.sin(delta_theta)
-                new_x_i = self.x[i] * cos_delta_theta - self.y[i] * sin_delta_theta
-                new_y_i = self.x[i] * sin_delta_theta + self.y[i] * cos_delta_theta
-            else:
-                raise ValueError(f'Unknown motion type: {motion_type}')
-            new_x.append(new_x_i)
-            new_y.append(new_y_i)
-
-        self.x = new_x
-        self.y = new_y
-
-    def send_data(self, data):
-        pass
-
-    def get_data(self):
-        pass
+from scipy.optimize import fsolve
+import scipy.signal as sgl
+from scipy.constants import c
+from .data import SourceConfig, SourceData, SimulatedSourceData, StationConfig
 
 
 # 阵元
-class Element(object):
+class Element:
     def __init__(self, number: int):
         self.number = number  # 序号
         self.data = []
@@ -150,22 +19,26 @@ class Element(object):
 
 
 # 测向站
-class Station(object):
-    def __init__(self, x=0, y=0, angle=0, n=8, d=6):
-        self.x = x  # x坐标
-        self.y = y  # y坐标
-        self.angle = angle  # 角度
-        self.n = n  # 阵元数量
-        self.elements = [Element(i) for i in range(n)]  # 阵元列表
-        self.d = d  # 阵列间距，最好取半波长间距
-        self.sample_rate = 100_000  # 采样率(Hz)
-        self.time = 0.05  # 采样时间(s)
+class Station:
+    def __init__(self, station_config: StationConfig, source_configs: tuple[SourceConfig] | list[SourceConfig]):
+        self.x = station_config.x  # x坐标
+        self.y = station_config.y  # y坐标
+        self.angle = station_config.angle / 180 * np.pi  # 角度(弧度)
+        self.n = station_config.n  # 阵元数量
+        self.elements = [Element(i) for i in range(self.n)]  # 阵元列表
+        self.d = station_config.d  # 阵列间距，最好取半波长间距
+        self.sample_rate = station_config.sample_rate  # 采样率(Hz)
+        self.time = station_config.t  # 采样时间(s)
         # 辐射源数据
-        self._lambda = [12, ]
-        self._theta = [100, ]
+        self._lambda = [c / source_config.f for source_config in source_configs]
+        self._a = [source_config.a for source_config in source_configs]
+
+    # 更新辐射源设置
+    def update_config(self, *args, **kwargs) -> bool:
+        pass
 
     # 采集数据
-    def get_data(self):
+    def get_data(self) -> tuple[SourceData] | list[SourceData]:
         pass
 
     # 计算角度
@@ -223,7 +96,7 @@ class Station(object):
         return ya
 
     # 生成滤波系数w
-    def beam_w(self, az: float | np.ndarray[int | float] = 0, M: int = 8, dspace: float = 0.5):
+    def beam_w(self, az: float | np.ndarray[float] = 0, M: int = 8, dspace: float = 0.5):
         # 生成滤波系数
         w = self.a_theta(az, M, dspace)
 
@@ -295,23 +168,21 @@ class Station(object):
 
 
 # 测向站模拟器
-class StationSimulator(object):
-    def __init__(self, station_configs: StationConfig | tuple[StationConfig] | list[StationConfig],
-                 wave_length: tuple[int | float] | list[int | float] = (3,),
-                 noise_power: int | float | tuple[int | float] | list[int | float] = 0, sleep_time=0.5):
+class StationSimulator:
+    def __init__(self, station_configs: tuple[StationConfig] | list[StationConfig],
+                 source_configs: tuple[SourceConfig] | list[SourceConfig],
+                 noise_power: float | tuple[float] | list[float] = 0.5, dt=0.5):
         # 添加测向站
-        if isinstance(station_configs, StationConfig):
-            self.stations = [Station(station_configs.x, station_configs.y, station_configs.angle, station_configs.n,
-                                     station_configs.d)] * 2
-        elif isinstance(station_configs, tuple | list):
-            self.stations = [Station(x=i.x, y=i.y, angle=i.angle, n=i.n, d=i.d) for i in station_configs]
-        else:
-            raise ValueError(f'Unknown station configs: {station_configs}')
-        self.source_number = len(wave_length)  # 辐射源数量
-        self.wave_length = wave_length  # 波长
+        self.stations = [Station(station_config, source_configs) for station_config in station_configs]
+        self.source_number = len(source_configs)  # 辐射源数量
         self.noise_power = noise_power  # 噪声功率
-        self.sleep_time = sleep_time  # 仿真时间间隔
+        self.dt = dt  # 仿真时间间隔
         self.theta = []  # 测向站角度
+
+    # 更新参数
+    def update_config(self, *args, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     @staticmethod
     def atan2(y, x):
@@ -320,8 +191,8 @@ class StationSimulator(object):
         :param x:
         :return:
         """
-        theta = math.atan2(y, x)
-        return theta if theta > 0 else math.pi + theta
+        theta = np.arctan2(y, x)
+        return theta if theta > 0 else np.pi + theta
 
     # 计算导向矢量a(θ)
     @staticmethod
@@ -335,7 +206,7 @@ class StationSimulator(object):
 
     # 计算复包络向量s(t)
     @staticmethod
-    def s_t() -> np.ndarray:
+    def s_t(n: int = 5000) -> np.ndarray:
         pass
 
     # 计算噪声向量n(t)
@@ -347,18 +218,21 @@ class StationSimulator(object):
     def x_t(self, _theta) -> np.ndarray:
         return np.dot(self.A_theta(_theta=_theta), self.s_t()) + self.n_t()
 
-    # 接受数据
-    @staticmethod
-    def get_data() -> tuple[SourceData] | list[SourceData]:
-        return (SourceData(x=20, y=20 * math.sqrt(3), a=10, f=20_000),)
+    # 计算阵列接收到的信号X(t)
+    def X_t(self, _theta) -> np.ndarray:
+        pass
 
-    # 发送数据
+    # 从辐射源模拟器接收数据
+    def receive_data(self) -> tuple[SimulatedSourceData] | list[SimulatedSourceData]:
+        pass
+
+    # 向辐射源模拟器发送数据
     def send_data(self):
-        print(f"theta = {self.theta}")
+        pass
 
     # 模拟一次
-    def _simulate(self):
-        # 获取数据
+    def simulate(self):
+        # 获取辐射源数据
         source_data = self.get_data()
 
         # 重置测得角度
@@ -381,7 +255,7 @@ class StationSimulator(object):
                 y = source.y - station.y
 
                 # 计算相对距离
-                d = math.hypot(x, y)
+                d = np.hypot(x, y)
 
                 # 距离判定
                 if d < 20 or d > 60:
@@ -389,13 +263,13 @@ class StationSimulator(object):
 
                 # 计算角度
                 theta = station.angle - self.atan2(y, x)
-                if theta > math.pi:
-                    theta = 2 * math.pi - theta
-                elif theta < -math.pi:
-                    theta = 2 * math.pi + theta
+                if theta > np.pi:
+                    theta = 2 * np.pi - theta
+                elif theta < -np.pi:
+                    theta = 2 * np.pi + theta
 
                 # 角度判定
-                if abs(theta) > math.pi / 3:
+                if abs(theta) > np.pi / 3:
                     continue
 
                 # 生成阵元 0 采样数据
@@ -425,19 +299,3 @@ class StationSimulator(object):
 
             # 计算角度
             self.theta.append(station.calculate_angle(element_signal))
-
-            # 发送数据
-            self.send_data()
-
-    def simulate(self):
-        # 模拟一次
-        self._simulate()
-        # 延时
-        time.sleep(self.sleep_time)
-
-
-if __name__ == '__main__':
-    station_config = StationConfig(x=0, y=0, angle=90 / 180 * math.pi, n=8, d=6, sample_rate=100_000, t=0.05)
-    station_simulator = StationSimulator(station_config)
-    while True:
-        station_simulator.simulate()
