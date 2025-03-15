@@ -17,7 +17,7 @@ class StationConfig:
     n: int = 8  # 阵列单元数(8-16)
     d: int | float = 6  # 阵列间距(半波长6m)
     sample_rate: int | float = 100_000  # 采样频率(Hz)
-    time: int | float = 0.05  # 采样时间(s)
+    t: int | float = 0.05  # 采样时间(s)
 
 
 # 辐射源数据
@@ -161,8 +161,8 @@ class Station(object):
         self.sample_rate = 100_000  # 采样率(Hz)
         self.time = 0.05  # 采样时间(s)
         # 辐射源数据
-        self.lamda = 12
-        self.theta = 100
+        self._lambda = [12, ]
+        self._theta = [100, ]
 
     # 采集数据
     def get_data(self):
@@ -176,44 +176,36 @@ class Station(object):
         :param element_signal: 阵列接收到的信号数据，形状为 (n,)，其中 n 是阵元数量
         :return: 估计的信号源角度
         """
-        # 定义角度搜索范围
-        angle_range = np.linspace(-90, 90, 181)  # 从 -90 度到 90 度，步长为 1 度
+        for i in range(len(self._lambda)):
+            # 定义角度搜索范围
+            angles = np.linspace(-90, 90, 181)  # 从 -90 度到 90 度，步长为 1 度
+            # 响应字典
+            response = dict()
+            # 遍历所有角度
+            for angle in angles:
+                # 计算当前角度下的波束形成权重
+                w = self.beam_w(az=angle, M=self.n, dspace=self.d / self._lambda[i])
 
-        # 初始化最大响应值和对应的角度
-        max_response1 = -np.inf
-        max_response2 = -np.inf
-        estimated_angle1 = 0
-        estimated_angle2 = 0
+                # 计算阵列在该角度下的响应
+                response[angle] = np.abs(np.dot(w.T.conj(), element_signal)).sum()
 
-        # 遍历所有角度
-        for angle in angle_range:
-            # 计算当前角度下的波束形成权重
-            w = self.beam_w(az=angle, M=self.n, dspace=self.d / self.lamda)
+            angle1 = max(response, key=response.get)
+            if angle1 == -90:
+                angle2 = angles[2]
+            elif angle1 == 90:
+                angle2 = angles[-2]
+            else:
+                angle2 = angle1 - 1 if response[angle1 - 1] > response[angle1 + 1] else angle1 + 1
 
-            # 计算阵列在该角度下的响应
-            response = np.abs(np.dot(w.T.conj(), element_signal[:, 0]))
+            return sorted([angle1, angle2])
 
-            # 更新两个最大响应值和对应的角度
-            if response > max_response1:
-                # 如果当前响应大于最大响应1，则更新最大响应1，并将原来的最大响应1降级为最大响应2
-                max_response2 = max_response1
-                estimated_angle2 = estimated_angle1
-                max_response1 = response
-                estimated_angle1 = angle
-            elif response > max_response2:
-                # 如果当前响应只大于最大响应2
-                max_response2 = response
-                estimated_angle2 = angle
-        return [estimated_angle1, estimated_angle2]
-
+    # 计算a(θ)
     @staticmethod
-    def a_theta(az=np.ndarray([0]), M=8, dspace=0.5):
+    def a_theta(az: float | np.ndarray = 0, M: int = 8, dspace: float = 0.5):
+        return np.exp(-1j * np.arange(M).reshape((M, 1)) * 2 * np.pi * dspace * np.sin(az * np.pi / 180.0))
 
-        phai = 2 * np.pi * dspace * np.arange(M).reshape((M, 1)) * np.sin(az * np.pi / 180.0)
-        return np.exp(1j * phai)
-
+    # 生成波束方向图
     def dirfun(self, w, plotcur=False):
-
         if w.ndim == 1:
             m = len(w)
         else:
@@ -230,25 +222,21 @@ class Station(object):
 
         return ya
 
-    def beam_w(self, az: int | float | np.ndarray[int | float] = 0, M=8, dspace=0.5):
-
+    # 生成滤波系数w
+    def beam_w(self, az: float | np.ndarray[int | float] = 0, M: int = 8, dspace: float = 0.5):
+        # 生成滤波系数
         w = self.a_theta(az, M, dspace)
+
+        # 切比雪夫滤波
         warnings.filterwarnings("ignore", category=UserWarning)
-
-        # generate a Chebyshev window，the attenuation rate 20
-        win = sgl.windows.chebwin(M, at=20)
-
+        win = sgl.windows.chebwin(M, at=20)  # 生成切比雪夫窗，旁瓣衰减率为20
         warnings.filterwarnings("default", category=UserWarning)
-
         win = win / np.sum(win)
         if w.ndim == 2:
-            m, n = w.shape
-            for i in range(n):
-                w[:, i] = w[:, i] * win
+            for i in range(w.shape[1]):
+                w[:, i] *= win
         elif w.ndim == 1:
-            w = w * win
-        else:
-            pass
+            w *= win
         return w
 
     def dir_fun_p(self, w, b):
@@ -310,7 +298,7 @@ class Station(object):
 class StationSimulator(object):
     def __init__(self, station_configs: StationConfig | tuple[StationConfig] | list[StationConfig],
                  wave_length: tuple[int | float] | list[int | float] = (3,),
-                 noise_power: int | float | tuple[int | float] | list[int | float] = 0.5, sleep_time=0.5):
+                 noise_power: int | float | tuple[int | float] | list[int | float] = 0, sleep_time=0.5):
         # 添加测向站
         if isinstance(station_configs, StationConfig):
             self.stations = [Station(station_configs.x, station_configs.y, station_configs.angle, station_configs.n,
@@ -335,53 +323,87 @@ class StationSimulator(object):
         theta = math.atan2(y, x)
         return theta if theta > 0 else math.pi + theta
 
+    # 计算导向矢量a(θ)
+    @staticmethod
+    def a_theta(_theta: float = 0, _n: int = 8, _d: float = 6, _lambda: float = 12) -> np.ndarray:
+        return np.exp(-2j * np.pi * np.arange(_n) * _d * np.sin(_theta) / _lambda)
+
+    # 计算阵列流形矩阵
+    @staticmethod
+    def A_theta(_theta: np.array, _n: int = 8, _d: float = 6, _lambda: float = 12) -> np.ndarray:
+        return np.exp(2j * np.pi * np.arange(_n).reshape((-1, 1)) * _d * np.sin(_theta.reshape((1, -1))) / _lambda)
+
+    # 计算复包络向量s(t)
+    @staticmethod
+    def s_t() -> np.ndarray:
+        pass
+
+    # 计算噪声向量n(t)
+    @staticmethod
+    def n_t() -> np.ndarray:
+        pass
+
+    # 计算阵元接收到的信号x(t)
+    def x_t(self, _theta) -> np.ndarray:
+        return np.dot(self.A_theta(_theta=_theta), self.s_t()) + self.n_t()
+
     # 接受数据
     @staticmethod
     def get_data() -> tuple[SourceData] | list[SourceData]:
-        return (SourceData(20, 20 * math.sqrt(3), 10, 20_000),)
+        return (SourceData(x=20, y=20 * math.sqrt(3), a=10, f=20_000),)
 
     # 发送数据
     def send_data(self):
-        print(self.theta)
+        print(f"theta = {self.theta}")
 
     # 模拟一次
     def _simulate(self):
         # 获取数据
         source_data = self.get_data()
+
         # 重置测得角度
         self.theta = []
+
         # 对每个测向站
         for i, station in enumerate(self.stations):
+
             # 采样数量
             n = int(station.time * station.sample_rate)
+
             # 阵列信号
             element_signal = np.zeros((station.n, n), dtype=complex)
+
             # 对每个信号源
             for j, source in enumerate(source_data):
+
                 # 计算相对位置
                 x = source.x - station.x
                 y = source.y - station.y
+
                 # 计算相对距离
                 d = math.hypot(x, y)
+
                 # 距离判定
                 if d < 20 or d > 60:
                     continue
+
                 # 计算角度
                 theta = station.angle - self.atan2(y, x)
                 if theta > math.pi:
                     theta = 2 * math.pi - theta
                 elif theta < -math.pi:
                     theta = 2 * math.pi + theta
+
                 # 角度判定
                 if abs(theta) > math.pi / 3:
                     continue
+
                 # 生成阵元 0 采样数据
                 t = np.linspace(0, station.time, n)  # 生成时间切片
                 fi0 = np.random.random()
                 s0 = source.a * np.cos(2 * np.pi * source.f * t + fi0)  # 生成采样
                 # 生成方向矢量
-                a = np.exp(1j * 2 * np.pi * station.d * np.arange(station.n) * np.sin(theta * np.pi / 180.0) /
-                           self.wave_length[j])
+                a = self.a_theta(_theta=theta, _n=station.n, _d=station.d, _lambda=station._lambda[j])
                 # 信号叠加
                 element_signal += np.dot(a.reshape(station.n, 1), s0.reshape(1, n))
 
@@ -393,6 +415,7 @@ class StationSimulator(object):
             else:
                 raise ValueError(f'Invalid noise_power: {self.noise_power} must be int, float, tuple or list')
             noise = np.sqrt(noise_power / 2) * (np.random.randn(station.n, n) + 1j * np.random.randn(station.n, n))
+
             # 生成观测信号
             element_signal += noise
 
@@ -407,12 +430,14 @@ class StationSimulator(object):
             self.send_data()
 
     def simulate(self):
+        # 模拟一次
         self._simulate()
+        # 延时
         time.sleep(self.sleep_time)
 
 
 if __name__ == '__main__':
-    station_config = StationConfig(0, 0, 90 / 180 * math.pi, 8, 6, 100_000, 0.05)
+    station_config = StationConfig(x=0, y=0, angle=90 / 180 * math.pi, n=8, d=6, sample_rate=100_000, t=0.05)
     station_simulator = StationSimulator(station_config)
     while True:
         station_simulator.simulate()
