@@ -23,7 +23,7 @@ class Station:
     def __init__(self, station_config: StationConfig, source_configs: tuple[SourceConfig] | list[SourceConfig]):
         self.x = station_config.x  # x坐标
         self.y = station_config.y  # y坐标
-        self.angle = station_config.angle / 180 * np.pi  # 角度(弧度)
+        self.angle = station_config.angle  # 角度(弧度)
         self.n = station_config.n  # 阵元数量
         self.elements = [Element(i) for i in range(self.n)]  # 阵元列表
         self.d = station_config.d  # 阵列间距，最好取半波长间距
@@ -32,6 +32,7 @@ class Station:
         # 辐射源数据
         self._lambda = [c / source_config.f for source_config in source_configs]
         self._a = [source_config.a for source_config in source_configs]
+        self.theta = dict()  # 辐射源测向站角度
 
     # 更新辐射源设置
     def update_config(self, *args, **kwargs) -> bool:
@@ -49,28 +50,29 @@ class Station:
         :param element_signal: 阵列接收到的信号数据，形状为 (n,)，其中 n 是阵元数量
         :return: 估计的信号源角度
         """
-        for i in range(len(self._lambda)):
-            # 定义角度搜索范围
-            angles = np.linspace(-90, 90, 181)  # 从 -90 度到 90 度，步长为 1 度
-            # 响应字典
-            response = dict()
-            # 遍历所有角度
-            for angle in angles:
-                # 计算当前角度下的波束形成权重
-                w = self.beam_w(az=angle, M=self.n, dspace=self.d / self._lambda[i])
+        # 定义角度搜索范围
+        angles = np.linspace(-90, stop=90, num=181)  # 从 -90 度到 90 度，步长为 1 度
+        # 响应字典
+        response = dict()
+        # 遍历所有角度
+        for angle in angles:
+            # 计算当前角度下的波束形成权重
+            w = self.beam_w(az=angle, M=self.n, dspace=self.d / 12)
 
-                # 计算阵列在该角度下的响应
-                response[angle] = np.abs(np.dot(w.T.conj(), element_signal)).sum()
+            # 计算阵列在该角度下的响应
+            response[angle] = np.abs(np.dot(w.T.conj(), element_signal)).sum()
 
-            angle1 = max(response, key=response.get)
-            if angle1 == -90:
-                angle2 = angles[2]
-            elif angle1 == 90:
-                angle2 = angles[-2]
-            else:
-                angle2 = angle1 - 1 if response[angle1 - 1] > response[angle1 + 1] else angle1 + 1
+        angle1 = max(response, key=response.get)
+        if angle1 == -90:
+            angle2 = angles[2]
+        elif angle1 == 90:
+            angle2 = angles[-2]
+        else:
+            angle2 = angle1 - 1 if response[angle1 - 1] > response[angle1 + 1] else angle1 + 1
 
-            return sorted([angle1, angle2])
+        # 记录角度
+        self.theta[c / self._lambda[0]] = angle1
+        print(f"calculated angle = {angle1}")
 
     # 计算a(θ)
     @staticmethod
@@ -177,7 +179,8 @@ class StationSimulator:
         self.source_number = len(source_configs)  # 辐射源数量
         self.noise_power = noise_power  # 噪声功率
         self.dt = dt  # 仿真时间间隔
-        self.theta = []  # 测向站角度
+        self.source_data = None  # 辐射源数据
+        self.signal = None  # 阵列信号
 
     # 更新参数
     def update_config(self, *args, **kwargs):
@@ -230,13 +233,9 @@ class StationSimulator:
     def send_data(self):
         pass
 
-    # 模拟一次
-    def simulate(self):
-        # 获取辐射源数据
-        source_data = self.get_data()
-
-        # 重置测得角度
-        self.theta = []
+    def calculate_signal(self):
+        # 初始化阵列信号
+        self.signal = []
 
         # 对每个测向站
         for i, station in enumerate(self.stations):
@@ -245,10 +244,10 @@ class StationSimulator:
             n = int(station.time * station.sample_rate)
 
             # 阵列信号
-            element_signal = np.zeros((station.n, n), dtype=complex)
+            station_signal = np.zeros((station.n, n), dtype=complex)
 
             # 对每个信号源
-            for j, source in enumerate(source_data):
+            for j, source in enumerate(self.source_data):
 
                 # 计算相对位置
                 x = source.x - station.x
@@ -262,7 +261,7 @@ class StationSimulator:
                     continue
 
                 # 计算角度
-                theta = station.angle - self.atan2(y, x)
+                theta = station.angle / 180 * np.pi - self.atan2(y, x)
                 if theta > np.pi:
                     theta = 2 * np.pi - theta
                 elif theta < -np.pi:
@@ -277,9 +276,9 @@ class StationSimulator:
                 fi0 = np.random.random()
                 s0 = source.a * np.cos(2 * np.pi * source.f * t + fi0)  # 生成采样
                 # 生成方向矢量
-                a = self.a_theta(_theta=theta, _n=station.n, _d=station.d, _lambda=station._lambda[j])
+                a = self.a_theta(_theta=theta, _n=station.n, _d=station.d, _lambda=12)
                 # 信号叠加
-                element_signal += np.dot(a.reshape(station.n, 1), s0.reshape(1, n))
+                station_signal += np.dot(a.reshape(station.n, 1), s0.reshape(1, n))
 
             # 生成高斯噪声
             if isinstance(self.noise_power, tuple | list):
@@ -291,11 +290,28 @@ class StationSimulator:
             noise = np.sqrt(noise_power / 2) * (np.random.randn(station.n, n) + 1j * np.random.randn(station.n, n))
 
             # 生成观测信号
-            element_signal += noise
+            station_signal += noise
 
             # 对每个阵元
             for j, element in enumerate(station.elements):
-                element.data = list(element_signal[i])
+                element.data = list(station_signal[i])
 
-            # 计算角度
-            self.theta.append(station.calculate_angle(element_signal))
+            # 记录测向站信号
+            self.signal.append(station_signal)
+
+    def calculate_theta(self):
+        # 对每个测向站
+        for i, station in enumerate(self.stations):
+            station.calculate_angle(self.signal[i])
+
+    # 模拟一次
+    def simulate(self):
+        # 接受辐射源数据
+        self.receive_data()
+        # 计算信号
+        self.calculate_signal()
+        # 计算角度
+        self.calculate_theta()
+        # 发送角度数据
+        self.send_data()
+
