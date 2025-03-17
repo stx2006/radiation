@@ -32,33 +32,41 @@ class Source:
         pass
 
     # 解算位置
-    def calculate_position(self, station_data: tuple[StationData] | list[StationData]):
+    def calculate_position(self, station_datas: tuple[StationData] | list[StationData]):
         # 判定是否有足够数据计算辐射源位置
-        if len(station_data) < 2:
+        if station_datas is None:
             return self.x, self.y
+        else:
+            number = 0
+            for station in station_datas:
+                if self.f in station.theta.keys():
+                    number += 1
+            if number < 2:
+                return self.x, self.y
 
-        # 计算从基站 1 到辐射源的射线的角度
-        ray_angle_1 = station_data[0].angle - station_data[0].theta[self.f]
-        # 计算从基站 2 到辐射源的射线的角度
-        ray_angle_2 = station_data[1].angle - station_data[1].theta[self.f]
+        # 构建最小二乘法所需的矩阵 A 和向量 b
+        A = []
+        B = []
+        for station_data in station_datas:
+            # 计算从基站到辐射源的射线的角度
+            ray_angle = station_data.angle - station_data.theta[self.f]
+            # 射线的斜率
+            k = np.tan(np.radians(ray_angle))
+            # 射线的截距
+            b = station_data.y - k * station_data.x
+            # 构建矩阵 A 和向量 b
+            A.append([k, -1])
+            B.append(-b)
 
-        # 两条射线的斜率
-        m1 = np.tan(ray_angle_1 / 180 * np.pi)
-        m2 = np.tan(ray_angle_2 / 180 * np.pi)
+        A = np.array(A)
+        B = np.array(B)
 
-        # 检查两条射线是否平行
-        if np.isclose(m1, m2):
-            print("两条射线平行，无法计算交点。")
-            return None, None
-
-        # 两条射线的截距
-        c1 = station_data[0].y - m1 * station_data[0].x
-        c2 = station_data[1].y - m2 * station_data[1].x
-
-        # 计算交点的 x 坐标
-        x = (c2 - c1) / (m1 - m2)
-        # 计算交点的 y 坐标
-        y = m1 * x + c1
+        # 使用最小二乘法求解
+        try:
+            x, y = np.linalg.lstsq(A, B, rcond=None)[0]
+        except np.linalg.LinAlgError:
+            print("最小二乘法求解失败。")
+            return self.x, self.y
 
         self.x = x
         self.y = y
@@ -85,7 +93,30 @@ class SourceSimulator:
 
     # 更新设置
     def update_config(self, *args, **kwargs):
-        pass
+        if args:
+            if len(args) >= 1 and args[0]:
+                self.sources = [Source(config) for config in args[0]]
+            if len(args) >= 2 and args[1]:
+                source_motion_configs = args[1]
+                self.x = [config.x for config in source_motion_configs]
+                self.y = [config.y for config in source_motion_configs]
+                self.motion_types = [config.motion_type for config in source_motion_configs]
+                self.v = [config.v for config in source_motion_configs]
+                self.r = [config.r for config in source_motion_configs]
+            if len(args) >= 3 and args[2]:
+                self.dt = args[2]
+
+        if 'source_configs' in kwargs:
+            self.sources = [Source(config) for config in kwargs['source_configs']]
+        if 'source_motion_configs' in kwargs:
+            source_motion_configs = kwargs['source_motion_configs']
+            self.x = [config.x for config in source_motion_configs]
+            self.y = [config.y for config in source_motion_configs]
+            self.motion_types = [config.motion_type for config in source_motion_configs]
+            self.v = [config.v for config in source_motion_configs]
+            self.r = [config.r for config in source_motion_configs]
+        if 'dt' in kwargs:
+            self.dt = kwargs['dt']
 
     # 更新辐射源位置
     def update_position(self):

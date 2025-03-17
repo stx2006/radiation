@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import fsolve
 import scipy.signal as sgl
+from scipy.fft import fft
 from scipy.constants import c
 from .data import SourceConfig, SourceData, SimulatedSourceData, StationConfig
 
@@ -20,6 +21,8 @@ class Element:
 
 # 测向站
 class Station:
+    carrier_wavelength = 12  # 载波波长 12 米
+
     def __init__(self, station_config: StationConfig, source_configs: tuple[SourceConfig] | list[SourceConfig]):
         self.x = station_config.x  # x坐标
         self.y = station_config.y  # y坐标
@@ -28,7 +31,7 @@ class Station:
         self.elements = [Element(i) for i in range(self.n)]  # 阵元列表
         self.d = station_config.d  # 阵列间距，最好取半波长间距
         self.sample_rate = station_config.sample_rate  # 采样率(Hz)
-        self.time = station_config.t  # 采样时间(s)
+        self.t = station_config.t  # 采样时间(s)
         # 辐射源数据
         self._lambda = [c / source_config.f for source_config in source_configs]
         self._a = [source_config.a for source_config in source_configs]
@@ -43,50 +46,60 @@ class Station:
         pass
 
     # 计算角度
-    def calculate_angle(self, element_signal):
+    def calculate_thetas(self, x):
         """
         计算信号源的到达角度（DOA）
 
-        :param element_signal: 阵列接收到的信号数据，形状为 (n,)，其中 n 是阵元数量
+        :param x: 阵列接收到的信号数据，形状为 (n,)，其中 n 是阵元数量
         :return: 估计的信号源角度
         """
-        # 定义角度搜索范围
-        angles = np.linspace(-90, stop=90, num=181)  # 从 -90 度到 90 度，步长为 1 度
-        # 响应字典
-        response = dict()
-        # 遍历所有角度
-        for angle in angles:
-            # 计算当前角度下的波束形成权重
-            w = self.beam_w(az=angle, M=self.n, dspace=self.d / 12)
-
-            # 计算阵列在该角度下的响应
-            response[angle] = np.abs(np.dot(w.T.conj(), element_signal)).sum()
-
-        angle1 = max(response, key=response.get)
-        if angle1 == -90:
-            angle2 = angles[2]
-        elif angle1 == 90:
-            angle2 = angles[-2]
-        else:
-            angle2 = angle1 - 1 if response[angle1 - 1] > response[angle1 + 1] else angle1 + 1
-
-        # 记录角度
-        self.theta[c / self._lambda[0]] = angle1
-        print(f"calculated angle = {angle1}")
+        n = int(self.sample_rate * self.t)  # 采样数
+        beam_a = np.linspace(-90, stop=90, num=37)  # 生成角度搜索范围，从 -90 度到 90 度，步长为 1 度
+        beam_w = self.beam_w(beam_a)  # 生成空间滤波权重
+        y = np.dot(beam_w.T.conj(), x)  # 空间滤波
+        yf = fft(y, axis=1)  # 快速傅里叶变换
+        yf2 = yf[:, 0:n // 2]  # 取前一半
+        beams, peaks = self.find_targets_beam(yf2)  # 寻找峰值
+        for beam, peak in zip(beams, peaks):
+            w1 = beam_w[:, beam[0]]  # 空间滤波权重1
+            w2 = beam_w[:, beam[1]]  # 空间滤波权重2
+            y1 = np.abs(np.dot(w1.T.conj(), x).sum())  # beam 1 output amplitude
+            y2 = np.abs(np.dot(w2.T.conj(), x).sum())  # beam 2 output amplitude
+            b = (y1 - y2) / (y1 + y2)  # 计算 b
+            theta = self.calculate_theta(b, w1, w2, beam_a[beam[0]], beam_a[beam[1]])[0]  # 解方程算角度
+            self.theta[peak * self.sample_rate / n] = theta  # 记录角度(f = k * sample_rate / n)
+            print(f"calculated angle = {theta}")
 
     # 计算a(θ)
-    @staticmethod
-    def a_theta(az: float | np.ndarray = 0, M: int = 8, dspace: float = 0.5):
-        return np.exp(-1j * np.arange(M).reshape((M, 1)) * 2 * np.pi * dspace * np.sin(az * np.pi / 180.0))
+    def a_theta(self, az: float | np.ndarray = 0):
+        """
+        计算一个均匀线性阵列的转向矢量。
+
+        参数:
+        - az：方位角，单位为度。
+        —M：表示数组中元素的个数。
+        - dspace：以波长为单位的元素间距。
+
+        返回:
+        -给定参数的转向矢量。
+        """
+        return np.exp(
+            2j * np.arange(self.n).reshape((-1, 1)) * np.pi * self.d / self.carrier_wavelength * np.sin(np.radians(az)))
 
     # 生成波束方向图
     def dirfun(self, w, plotcur=False):
-        if w.ndim == 1:
-            m = len(w)
-        else:
-            m, n = w.shape
+        """
+        计算和绘制方向模式。
+
+        参数:
+        - w：数组的权重向量或矩阵。
+        - plotcur：布尔值，表示是否绘制当前模式。
+
+        返回:
+        -包含计算模式的绝对值的数组。
+        """
         t = np.linspace(-90, 90, 1000)
-        y = w.T.conj().dot(self.a_theta(t, m))
+        y = w.T.conj().dot(self.a_theta(t))
 
         ya = np.abs(y)
 
@@ -98,13 +111,24 @@ class Station:
         return ya
 
     # 生成滤波系数w
-    def beam_w(self, az: float | np.ndarray[float] = 0, M: int = 8, dspace: float = 0.5):
+    def beam_w(self, beam_a):
+        """
+        生成波束形成权重向量或矩阵。
+
+        参数:
+        - az：方位角，单位为度。
+        —M：表示数组中元素的个数。
+        - dspace：以波长为单位的元素间距。
+
+        返回:
+        -权重向量或矩阵与应用切比雪夫窗口。
+        """
         # 生成滤波系数
-        w = self.a_theta(az, M, dspace)
+        w = self.a_theta(beam_a)
 
         # 切比雪夫滤波
         warnings.filterwarnings("ignore", category=UserWarning)
-        win = sgl.windows.chebwin(M, at=20)  # 生成切比雪夫窗，旁瓣衰减率为20
+        win = sgl.windows.chebwin(self.n, at=20)  # 生成切比雪夫窗，旁瓣衰减率为20
         warnings.filterwarnings("default", category=UserWarning)
         win = win / np.sum(win)
         if w.ndim == 2:
@@ -114,54 +138,81 @@ class Station:
             w *= win
         return w
 
-    def dir_fun_p(self, w, b):
+    # 返回方向图 f(θ) 函数
+    def f_theta(self, w):
+        def f_theta(theta):
+            return np.abs(np.dot(w.T.conj(), self.a_theta(theta)))
 
-        wH = w.T.conj()
-        m = len(w)
+        return f_theta
 
-        def calc_s(x):
-            y = wH.dot(self.a_theta(x, m))
-            return np.abs(y[0]) / m - b
+    # 返回和差比幅曲线 k(θ) 曲线
+    def k_theta(self, w1, w2):
+        f_theta1 = self.f_theta(w1)
+        f_theta2 = self.f_theta(w2)
 
-        return calc_s
+        def k_theta(theta):
+            f1 = f_theta1(theta)
+            f2 = f_theta2(theta)
+            return (f1 - f2) / (f1 + f2)
 
-    def sum_minus_cur(self, w1, w2, b):
+        return k_theta
 
-        def wrapper(x):
-            f1 = self.dir_fun_p(w1, 0)
-            y1 = f1(x)
-            f2 = self.dir_fun_p(w2, 0)
-            y2 = f2(x)
-            return (y1 - y2) / (y1 + y2) - b
+    # 等式 k(θ) = b
+    def k_theta_equal_b(self, w1, w2, b):
+        """
+        封装用于计算两个模式截止值之差的函数。
 
-        return wrapper
+        参数:
+        - w1：第一个波束束的权重向量。
+        - w2：第二个波束的权重向量。
+        - b：期望的模式截止值。
 
-    def amp_comp(self, b, w1, w2, t1, t2):
+        返回:
+        -用于计算模式之间差异的包装函数。
+        """
+        k_theta = self.k_theta(w1=w1, w2=w2)
 
-        f3 = self.sum_minus_cur(w1, w2, b)
-        sol = fsolve(f3, (t1 + t2) / 2)  # 求解 f3=0 的解
-        return sol  # 返回解
+        def k_theta_equal_b(theta):
+            return k_theta(theta) - b
 
-    @staticmethod
-    def wave_gen(f, a, N=5000):
-        fs = 100e3
-        dt = 1 / fs
-        t = np.arange(0, dt * N, dt)
-        f = np.array(f)
-        x = np.cos(2 * np.pi * f.reshape(len(f), 1) * t.reshape(1, N))
-        a = np.array(a)
-        return t, a.reshape(len(a), 1) * x
+        return k_theta_equal_b
+
+    # 计算角度
+    def calculate_theta(self, b, w1, w2, t1, t2):
+        """
+        计算两个波束之间的振幅比较。
+
+        参数:
+        - b：两束之间期望的幅度比。
+        - w1：第一个波束的权重向量。
+        - w2：第二个波束的权重向量。
+        - t1：第一个波束的方位角。
+        - t2：第二个波束的方位角。
+
+        返回:
+        -方位角的解。
+        """
+        equation = self.k_theta_equal_b(w1, w2, b)  # k(θ) = b
+        theta = fsolve(func=equation, x0=(t1 + t2) / 2)  # 求解 k(θ) = b 的解
+        return theta  # 返回解
 
     @staticmethod
     def find_targets_beam(yf2):
-        yfabs = (yf2 * yf2.conj()).real
-        yfsum = np.sum(yfabs, axis=0)
-        yfdb = np.log10(yfsum) * 10
-        thr = np.median(yfdb) + 20
-        peaks, _ = sgl.find_peaks(yfdb, threshold=thr)  # 寻找峰值
-        beams = []
+        yfabs = (yf2 * yf2.conj()).real  # 计算频谱的幅度平方（即功率谱密度）
+        yfsum = np.sum(yfabs, axis=0)  # 绝对值求和
+        yfdb = np.log10(yfsum) * 10  # 转换为分贝（dB）
+        threshold = np.median(yfdb) + 20  # 设置阈值
+        peaks, _ = sgl.find_peaks(yfdb, threshold=threshold)  # 寻找峰值，返回峰值索引
+        beams = []  # 空间滤波波束
         for peak in peaks:
-            beams.append(np.argmax(yfabs[:, peak]))
+            beam1 = np.argmax(yfabs[:, peak])
+            if beam1 == 0:
+                beam2 = 1
+            elif beam1 == yfdb.shape[0] - 1:
+                beam2 = beam1 - 1
+            else:
+                beam2 = beam1 - 1 if yfdb[beam1 - 1] > yfdb[beam1 + 1] else beam1 + 1
+            beams.append((beam1, beam2))
         return beams, peaks
 
     # 发送数据
@@ -197,15 +248,15 @@ class StationSimulator:
         theta = np.arctan2(y, x)
         return theta if theta > 0 else np.pi + theta
 
-    # 计算导向矢量a(θ)
+    # 计算方向矢量 a(θ)
     @staticmethod
     def a_theta(_theta: float = 0, _n: int = 8, _d: float = 6, _lambda: float = 12) -> np.ndarray:
-        return np.exp(-2j * np.pi * np.arange(_n) * _d * np.sin(_theta) / _lambda)
+        return np.exp(2j * np.pi * np.arange(_n) * _d * np.sin(_theta) / _lambda)
 
     # 计算阵列流形矩阵
     @staticmethod
     def A_theta(_theta: np.array, _n: int = 8, _d: float = 6, _lambda: float = 12) -> np.ndarray:
-        return np.exp(2j * np.pi * np.arange(_n).reshape((-1, 1)) * _d * np.sin(_theta.reshape((1, -1))) / _lambda)
+        return np.exp(-2j * np.pi * np.arange(_n).reshape((-1, 1)) * _d * np.sin(_theta.reshape((1, -1))) / _lambda)
 
     # 计算复包络向量s(t)
     @staticmethod
@@ -241,14 +292,13 @@ class StationSimulator:
         for i, station in enumerate(self.stations):
 
             # 采样数量
-            n = int(station.time * station.sample_rate)
+            n = int(station.t * station.sample_rate)
 
             # 阵列信号
-            station_signal = np.zeros((station.n, n), dtype=complex)
+            signal = np.zeros((station.n, n), dtype=complex)
 
             # 对每个信号源
             for j, source in enumerate(self.source_data):
-
                 # 计算相对位置
                 x = source.x - station.x
                 y = source.y - station.y
@@ -261,7 +311,7 @@ class StationSimulator:
                     continue
 
                 # 计算角度
-                theta = station.angle / 180 * np.pi - self.atan2(y, x)
+                theta = np.radians(station.angle) - self.atan2(y, x)
                 if theta > np.pi:
                     theta = 2 * np.pi - theta
                 elif theta < -np.pi:
@@ -272,13 +322,13 @@ class StationSimulator:
                     continue
 
                 # 生成阵元 0 采样数据
-                t = np.linspace(0, station.time, n)  # 生成时间切片
+                t = np.linspace(0, station.t, n)  # 生成时间切片
                 fi0 = np.random.random()
                 s0 = source.a * np.cos(2 * np.pi * source.f * t + fi0)  # 生成采样
                 # 生成方向矢量
                 a = self.a_theta(_theta=theta, _n=station.n, _d=station.d, _lambda=12)
                 # 信号叠加
-                station_signal += np.dot(a.reshape(station.n, 1), s0.reshape(1, n))
+                signal += np.dot(a.reshape(station.n, 1), s0.reshape(1, n))
 
             # 生成高斯噪声
             if isinstance(self.noise_power, tuple | list):
@@ -290,19 +340,19 @@ class StationSimulator:
             noise = np.sqrt(noise_power / 2) * (np.random.randn(station.n, n) + 1j * np.random.randn(station.n, n))
 
             # 生成观测信号
-            station_signal += noise
+            signal += noise
 
             # 对每个阵元
             for j, element in enumerate(station.elements):
-                element.data = list(station_signal[i])
+                element.data = list(signal[i])
 
             # 记录测向站信号
-            self.signal.append(station_signal)
+            self.signal.append(signal)
 
     def calculate_theta(self):
         # 对每个测向站
         for i, station in enumerate(self.stations):
-            station.calculate_angle(self.signal[i])
+            station.calculate_thetas(self.signal[i])
 
     # 模拟一次
     def simulate(self):
@@ -314,4 +364,3 @@ class StationSimulator:
         self.calculate_theta()
         # 发送角度数据
         self.send_data()
-
