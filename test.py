@@ -11,7 +11,8 @@ if __name__ == '__main__':
     source3_motion_config = SourceMotionConfig(x=10, y=30, v=0, motion_type='circular', r=5)
     computer = ComputerSimulator(station_configs=[station1_config, station2_config],
                                  source_configs=[source1_config, source2_config, source3_config],
-                                 source_motion_configs=[source1_motion_config, source2_motion_config, source3_motion_config])
+                                 source_motion_configs=[source1_motion_config, source2_motion_config,
+                                                        source3_motion_config])
 
     # 计算机模拟
     computer.simulate()

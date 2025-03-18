@@ -1,11 +1,13 @@
 import warnings
+import socket
+import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import fsolve
 import scipy.signal as sgl
 from scipy.fft import fft
 from scipy.constants import c
-from .data import SourceConfig, SourceData, SimulatedSourceData, StationConfig
+from .data import SourceConfig, SourceData, SimulatedSourceData, StationConfig, StationData
 
 
 # 阵元
@@ -21,6 +23,7 @@ class Element:
 
 # 测向站
 class Station:
+    carrier_f = 10_000_000
     carrier_wavelength = 12  # 载波波长 12 米
 
     def __init__(self, station_config: StationConfig, source_configs: tuple[SourceConfig] | list[SourceConfig]):
@@ -42,7 +45,7 @@ class Station:
         pass
 
     # 采集数据
-    def get_data(self) -> tuple[SourceData] | list[SourceData]:
+    def receive_data(self) -> tuple[SourceData] | list[SourceData]:
         pass
 
     # 计算角度
@@ -230,8 +233,28 @@ class StationSimulator:
         self.source_number = len(source_configs)  # 辐射源数量
         self.noise_power = noise_power  # 噪声功率
         self.dt = dt  # 仿真时间间隔
-        self.source_data = None  # 辐射源数据
+        self.sock = None  # 客户端套接字
+        self.source_datas = []  # 辐射源数据
         self.signal = None  # 阵列信号
+
+    def communication_init(self, client_ip='127.0.0.1', timeout=1, port=8080):
+        assert 1000 <= port < 65536
+        self.sock = socket.socket()  # 建立套接字对象
+        self.sock.settimeout(timeout)  # 设置超时时间
+        self.sock.connect((client_ip, port))  # 连接到服务器
+        print(self.sock)
+
+    # 从辐射源模拟器接收数据
+    def receive_data(self):
+        serialized_data = self.sock.recv(1024)
+        self.source_datas = pickle.loads(serialized_data)
+
+    # 向辐射源模拟器发送数据
+    def send_data(self):
+        station_data = [StationData(x=station.x, y=station.y, angle=station.angle, theta=station.theta) for station in
+                        self.stations]
+        serialized_data = pickle.dumps(station_data)
+        self.sock.sendall(serialized_data)
 
     # 更新参数
     def update_config(self, *args, **kwargs):
@@ -276,14 +299,6 @@ class StationSimulator:
     def X_t(self, _theta) -> np.ndarray:
         pass
 
-    # 从辐射源模拟器接收数据
-    def receive_data(self) -> tuple[SimulatedSourceData] | list[SimulatedSourceData]:
-        pass
-
-    # 向辐射源模拟器发送数据
-    def send_data(self):
-        pass
-
     def calculate_signal(self):
         # 初始化阵列信号
         self.signal = []
@@ -298,7 +313,7 @@ class StationSimulator:
             signal = np.zeros((station.n, n), dtype=complex)
 
             # 对每个信号源
-            for j, source in enumerate(self.source_data):
+            for j, source in enumerate(self.source_datas):
                 # 计算相对位置
                 x = source.x - station.x
                 y = source.y - station.y

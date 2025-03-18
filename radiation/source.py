@@ -1,6 +1,9 @@
+import socket
+import pickle
+import struct
 import numpy as np
 from scipy.constants import c
-from .data import SourceConfig, SourceMotionConfig, StationData
+from .data import SourceConfig, SourceMotionConfig, SourceData, SimulatedSourceData, StationData
 
 
 # 辐射源
@@ -89,7 +92,31 @@ class SourceSimulator:
         self.r = [source_motion_config.r for source_motion_config in source_motion_configs]  # 每个辐射源的半径（如果是圆周运动）
         self.t = 0  # 当前时间
         self.dt = dt  # 模拟间隔时间
+        self.sock = None  # 套接字
+        self.client = None  # 客户端
         self.station_datas = None  # 测向站数据
+
+    def communication_init(self, client_ip='127.0.0.1', timeout=1, port=8080):
+        assert 1000 <= port < 65536
+        self.sock = socket.socket(family=socket.AF_INET, type=socket.SOCK_STREAM)  # 创建服务器端套接字对象
+        self.sock.settimeout(timeout)  # 设置超时时间
+        self.sock.bind((client_ip, port))  # 绑定地址
+        self.sock.listen(1)  # 监听连接
+        self.client, _ = self.sock.accept()  # 接受连接
+        print(self.client)
+        print(123)
+
+    # 从测向站模拟器获取数据
+    def receive_data(self):
+        serialized_data = self.client.recv(1024)
+        self.station_datas = pickle.loads(serialized_data)
+
+    # 向测向站模拟器发送数据
+    def send_data(self):
+        simulated_source_data = [SimulatedSourceData(a=self.sources[i].a, f=self.sources[i].f, x=self.x[i], y=self.y[i])
+                                 for i in range(len(self.sources))]
+        serialized_data = pickle.dumps(simulated_source_data)
+        self.client.sendall(serialized_data)
 
     # 更新设置
     def update_config(self, *args, **kwargs):
@@ -153,14 +180,6 @@ class SourceSimulator:
         self.y = new_y
 
         print(f"real position : x = {self.x}, y = {self.y}")
-
-    # 从测向站模拟器获取数据
-    def receive_data(self) -> StationData:
-        pass
-
-    # 向测向站模拟器发送数据
-    def send_data(self):
-        pass
 
     # 计算位置
     def calculate_position(self):
