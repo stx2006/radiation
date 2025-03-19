@@ -10,7 +10,7 @@ if __name__ == '__main__':
     source_simulator = SourceSimulator(source_configs=[source1_config, source2_config, source3_config],
                                        source_motion_configs=[source1_motion_config, source2_motion_config,
                                                               source3_motion_config], dt=0.5)
-    source_simulator.communication_init(timeout=10)
+    source_simulator.communication_init(timeout=10, client_ip='')
     # 计算机模拟
     while True:
         source_simulator.simulate()

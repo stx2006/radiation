@@ -2,9 +2,10 @@ import warnings
 import socket
 import pickle
 import numpy as np
+from scipy.ndimage import uniform_filter
 import matplotlib.pyplot as plt
 from scipy.optimize import fsolve
-import scipy.signal as sgl
+from scipy.signal import chirp, windows, savgol_filter, find_peaks
 from scipy.fft import fft
 from scipy.constants import c
 from .data import SourceConfig, SourceData, SimulatedSourceData, StationConfig, StationData
@@ -23,8 +24,8 @@ class Element:
 
 # 测向站
 class Station:
-    carrier_f = 10_000_000
-    carrier_wavelength = 12  # 载波波长 12 米
+    carrier_f = 25_000_000  # 载波频率 25 MHz
+    carrier_wavelength = 12  # 载波波长 12 m
 
     def __init__(self, station_config: StationConfig, source_configs: tuple[SourceConfig] | list[SourceConfig]):
         self.x = station_config.x  # x坐标
@@ -35,9 +36,11 @@ class Station:
         self.d = station_config.d  # 阵列间距，最好取半波长间距
         self.sample_rate = station_config.sample_rate  # 采样率(Hz)
         self.t = station_config.t  # 采样时间(s)
+        self.m = int(self.sample_rate * self.t)  # 采样数
         # 辐射源数据
-        self._lambda = [c / source_config.f for source_config in source_configs]
-        self._a = [source_config.a for source_config in source_configs]
+        self.f = [source_config.f for source_config in source_configs]
+        self.a = [source_config.a for source_config in source_configs]
+        self.mode = [source_config.mode for source_config in source_configs]
         self.theta = dict()  # 辐射源测向站角度
 
     # 更新辐射源设置
@@ -49,19 +52,18 @@ class Station:
         pass
 
     # 计算角度
-    def calculate_thetas(self, x):
+    def calculate_thetas(self, x: np.ndarray) -> None:
         """
         计算信号源的到达角度（DOA）
 
         :param x: 阵列接收到的信号数据，形状为 (n,)，其中 n 是阵元数量
         :return: 估计的信号源角度
         """
-        n = int(self.sample_rate * self.t)  # 采样数
-        beam_a = np.linspace(-90, stop=90, num=37)  # 生成角度搜索范围，从 -90 度到 90 度，步长为 1 度
+        beam_a = np.linspace(-60, stop=60, num=25)  # 生成角度搜索范围，从 -60 度到 60 度，步长为 1 度
         beam_w = self.beam_w(beam_a)  # 生成空间滤波权重
         y = np.dot(beam_w.T.conj(), x)  # 空间滤波
         yf = fft(y, axis=1)  # 快速傅里叶变换
-        yf2 = yf[:, 0:n // 2]  # 取前一半
+        yf2 = yf[:, 0:self.m // 2]  # 取前一半
         beams, peaks = self.find_targets_beam(yf2)  # 寻找峰值
         for beam, peak in zip(beams, peaks):
             w1 = beam_w[:, beam[0]]  # 空间滤波权重1
@@ -70,7 +72,7 @@ class Station:
             y2 = np.abs(np.dot(w2.T.conj(), x).sum())  # beam 2 output amplitude
             b = (y1 - y2) / (y1 + y2)  # 计算 b
             theta = self.calculate_theta(b, w1, w2, beam_a[beam[0]], beam_a[beam[1]])[0]  # 解方程算角度
-            self.theta[peak * self.sample_rate / n] = theta  # 记录角度(f = k * sample_rate / n)
+            self.theta[peak * self.sample_rate / self.m] = theta  # 记录角度(f = k * sample_rate / n)
             print(f"calculated angle = {theta}")
 
     # 计算a(θ)
@@ -80,7 +82,7 @@ class Station:
 
         参数:
         - az：方位角，单位为度。
-        —M：表示数组中元素的个数。
+        - M：表示数组中元素的个数。
         - dspace：以波长为单位的元素间距。
 
         返回:
@@ -131,7 +133,7 @@ class Station:
 
         # 切比雪夫滤波
         warnings.filterwarnings("ignore", category=UserWarning)
-        win = sgl.windows.chebwin(self.n, at=20)  # 生成切比雪夫窗，旁瓣衰减率为20
+        win = windows.chebwin(self.n, at=20)  # 生成切比雪夫窗，旁瓣衰减率为20
         warnings.filterwarnings("default", category=UserWarning)
         win = win / np.sum(win)
         if w.ndim == 2:
@@ -203,9 +205,11 @@ class Station:
     def find_targets_beam(yf2):
         yfabs = (yf2 * yf2.conj()).real  # 计算频谱的幅度平方（即功率谱密度）
         yfsum = np.sum(yfabs, axis=0)  # 绝对值求和
-        yfdb = np.log10(yfsum) * 10  # 转换为分贝（dB）
+        yffiltered = uniform_filter(yfsum, size=5)  # 平滑处理
+        yfdb = np.log10(yffiltered) * 10  # 转换为分贝（dB）
+
         threshold = np.median(yfdb) + 20  # 设置阈值
-        peaks, _ = sgl.find_peaks(yfdb, threshold=threshold)  # 寻找峰值，返回峰值索引
+        peaks, _ = find_peaks(yfdb, threshold=threshold)  # 寻找峰值，返回峰值索引
         beams = []  # 空间滤波波束
         for peak in peaks:
             beam1 = np.argmax(yfabs[:, peak])
@@ -225,9 +229,12 @@ class Station:
 
 # 测向站模拟器
 class StationSimulator:
+    carrier_f = 25_000_000  # 载波频率 25 MHz
+    carrier_wavelength = 12  # 载波波长 12 m
+
     def __init__(self, station_configs: tuple[StationConfig] | list[StationConfig],
                  source_configs: tuple[SourceConfig] | list[SourceConfig],
-                 noise_power: float | tuple[float] | list[float] = 0.5, dt=0.5):
+                 noise_power: int | float = 0.5, dt: int | float = 0.5):
         # 添加测向站
         self.stations = [Station(station_config, source_configs) for station_config in station_configs]
         self.source_number = len(source_configs)  # 辐射源数量
@@ -263,108 +270,105 @@ class StationSimulator:
 
     @staticmethod
     def atan2(y, x):
-        """
-        :param y:
-        :param x:
-        :return:
-        """
         theta = np.arctan2(y, x)
         return theta if theta > 0 else np.pi + theta
 
+    # 计算角度
+    def calculate_theta(self, source: SimulatedSourceData, station: Station):
+        # 计算相对位置
+        x = source.x - station.x
+        y = source.y - station.y
+
+        # 计算相对距离
+        d = np.hypot(x, y)
+
+        # 距离判定
+        if d < 20 or d > 60:
+            return None
+
+        # 计算角度
+        theta = np.radians(station.angle) - self.atan2(y, x)
+        if theta > np.pi:
+            theta = 2 * np.pi - theta
+        elif theta < -np.pi:
+            theta = 2 * np.pi + theta
+
+        # 角度判定
+        if abs(theta) > np.pi / 3:
+            return None
+
+        return theta
+
     # 计算方向矢量 a(θ)
-    @staticmethod
-    def a_theta(_theta: float = 0, _n: int = 8, _d: float = 6, _lambda: float = 12) -> np.ndarray:
-        return np.exp(2j * np.pi * np.arange(_n) * _d * np.sin(_theta) / _lambda)
+    def a_theta(self, theta: float = 0, n: int = 8, d: float = 6) -> np.ndarray:
+        return np.exp(2j * np.pi * np.arange(n) * d * np.sin(theta) / self.carrier_wavelength).reshape(-1, 1)
 
-    # 计算阵列流形矩阵
-    @staticmethod
-    def A_theta(_theta: np.array, _n: int = 8, _d: float = 6, _lambda: float = 12) -> np.ndarray:
-        return np.exp(-2j * np.pi * np.arange(_n).reshape((-1, 1)) * _d * np.sin(_theta.reshape((1, -1))) / _lambda)
+    # 计算方向矢量 A(θ)
+    def A_theta(self, theta: np.array, n: int = 8, d: float = 6) -> np.ndarray:
+        return np.exp(2j * np.pi * np.arange(n).reshape((-1, 1)) * d * np.sin(theta.reshape((1, -1))) / self.carrier_wavelength)
 
-    # 计算复包络向量s(t)
-    @staticmethod
-    def s_t(n: int = 5000) -> np.ndarray:
-        pass
+    # 计算信号 s(t)
+    @classmethod
+    def s_t(cls, station: Station, source: SimulatedSourceData) -> np.ndarray:
+        n = int(station.t * station.sample_rate)  # 采样数量
+        t = np.linspace(0, station.t, n)  # 时间轴
+        if source.mode.upper() == 'FM':  # 调频
+            f = 50  # 调制信号频率
+            modulated_signal = chirp(t, source.f - f, float(t[-1]), source.f + f, method='linear')
+            return modulated_signal.reshape(1, -1)
+        elif source.mode.upper() == 'AM':  # 调幅
+            f = 50  # 调制信号频率
+            carrier_signal = np.sin(2 * np.pi * source.f * t)  # 载波信号
+            modulating_signal = np.sin(2 * np.pi * f * t)  # 调制信号
+            modulated_signal = (1 + modulating_signal) * carrier_signal  # 幅度调制（AM）
+            return modulated_signal.reshape(1, -1)
+        else:  # 不调制
+            carrier_signal = np.sin(2 * np.pi * source.f * t)  # 载波信号
+            return carrier_signal.reshape(1, -1)
 
     # 计算噪声向量n(t)
     @staticmethod
-    def n_t() -> np.ndarray:
-        pass
+    def n_t(station: Station, noise_power: int | float = 0) -> np.ndarray:
+        n, m = station.n, station.m  # 阵元数，采样数
+        noise = np.sqrt(noise_power / 2) * (np.random.randn(n, m) + 1j * np.random.randn(n, m))
+        return noise
 
     # 计算阵元接收到的信号x(t)
-    def x_t(self, _theta) -> np.ndarray:
-        return np.dot(self.A_theta(_theta=_theta), self.s_t()) + self.n_t()
+    def x_t(self, station: Station, source: SimulatedSourceData) -> np.ndarray | None:
+        theta = self.calculate_theta(station=station, source=source)  # 计算角度
+        if theta is None:
+            return None
+        return np.dot(self.a_theta(theta=theta, n=station.n), self.s_t(station=station, source=source))
 
     # 计算阵列接收到的信号X(t)
-    def X_t(self, _theta) -> np.ndarray:
-        pass
+    def X_t(self, station: Station, sources: tuple[SimulatedSourceData] | list[SimulatedSourceData],
+            noise_power: int | float = 0) -> np.ndarray:
+        signal = np.zeros((station.n, station.m), dtype=complex)  # 阵列信号
+        for source in sources:
+            _signal = self.x_t(station=station, source=source)
+            if _signal is None:
+                continue
+            signal += _signal
+        signal += self.n_t(station=station, noise_power=noise_power)
+        return signal
 
     def calculate_signal(self):
         # 初始化阵列信号
         self.signal = []
 
         # 对每个测向站
-        for i, station in enumerate(self.stations):
-
-            # 采样数量
-            n = int(station.t * station.sample_rate)
-
-            # 阵列信号
-            signal = np.zeros((station.n, n), dtype=complex)
-
-            # 对每个信号源
-            for j, source in enumerate(self.source_datas):
-                # 计算相对位置
-                x = source.x - station.x
-                y = source.y - station.y
-
-                # 计算相对距离
-                d = np.hypot(x, y)
-
-                # 距离判定
-                if d < 20 or d > 60:
-                    continue
-
-                # 计算角度
-                theta = np.radians(station.angle) - self.atan2(y, x)
-                if theta > np.pi:
-                    theta = 2 * np.pi - theta
-                elif theta < -np.pi:
-                    theta = 2 * np.pi + theta
-
-                # 角度判定
-                if abs(theta) > np.pi / 3:
-                    continue
-
-                # 生成阵元 0 采样数据
-                t = np.linspace(0, station.t, n)  # 生成时间切片
-                fi0 = np.random.random()
-                s0 = source.a * np.cos(2 * np.pi * source.f * t + fi0)  # 生成采样
-                # 生成方向矢量
-                a = self.a_theta(_theta=theta, _n=station.n, _d=station.d, _lambda=12)
-                # 信号叠加
-                signal += np.dot(a.reshape(station.n, 1), s0.reshape(1, n))
-
-            # 生成高斯噪声
-            if isinstance(self.noise_power, tuple | list):
-                noise_power = self.noise_power[i]
-            elif isinstance(self.noise_power, int | float):
-                noise_power = self.noise_power
-            else:
-                raise ValueError(f'Invalid noise_power: {self.noise_power} must be int, float, tuple or list')
-            noise = np.sqrt(noise_power / 2) * (np.random.randn(station.n, n) + 1j * np.random.randn(station.n, n))
-
+        for station in self.stations:
             # 生成观测信号
-            signal += noise
+            signal = self.X_t(station=station, sources=self.source_datas, noise_power=self.noise_power)
 
-            # 对每个阵元
+            # 阵元获取数据
             for j, element in enumerate(station.elements):
-                element.data = list(signal[i])
+                element.data = list(signal[j])
 
             # 记录测向站信号
             self.signal.append(signal)
 
-    def calculate_theta(self):
+    def calculate_thetas(self) -> None:
         # 对每个测向站
         for i, station in enumerate(self.stations):
             station.calculate_thetas(self.signal[i])
@@ -376,6 +380,6 @@ class StationSimulator:
         # 计算信号
         self.calculate_signal()
         # 计算角度
-        self.calculate_theta()
+        self.calculate_thetas()
         # 发送角度数据
         self.send_data()

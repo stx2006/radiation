@@ -11,6 +11,7 @@ class Source:
     def __init__(self, source_config: SourceConfig):
         self.a = source_config.a  # 初始辐射波幅度
         self.f = source_config.f  # 初始辐射波频率
+        self.mode = source_config.mode  # 调制方式
         self.x = np.inf  # x坐标
         self.y = np.inf  # y坐标
         self.time = 0  # 记录时间
@@ -113,10 +114,10 @@ class SourceSimulator:
 
     # 向测向站模拟器发送数据
     def send_data(self):
-        simulated_source_data = [SimulatedSourceData(a=self.sources[i].a, f=self.sources[i].f, x=self.x[i], y=self.y[i])
-                                 for i in range(len(self.sources))]
-        serialized_data = pickle.dumps(simulated_source_data)
-        self.client.sendall(serialized_data)
+        simulated_source_data = [SimulatedSourceData(a=source.a, f=source.f, mode=source.mode, x=self.x[i], y=self.y[i])
+                                 for i, source in enumerate(self.sources)]  # 生成辐射源模拟器数据
+        serialized_data = pickle.dumps(simulated_source_data)  # 序列化辐射源模拟器数据
+        self.client.sendall(serialized_data)  # 发送数据
 
     # 更新设置
     def update_config(self, *args, **kwargs):
@@ -156,7 +157,7 @@ class SourceSimulator:
         new_y = []
         for i in range(len(self.sources)):
             motion_type = self.motion_types[i]
-            speed = self.v[i] / 3.6
+            speed = self.v[i] / 3.6  # 单位换算 km/s -> m/s
             if motion_type == 'linear':
                 # 假设x方向运动
                 new_x_i = self.x[i] + speed * self.dt

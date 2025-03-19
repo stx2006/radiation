@@ -17,17 +17,18 @@ class Computer1Simulator(SourceSimulator):
         # 更新位置
         self.update_position()
         # 发送数据
-        data = [SimulatedSourceData(x=self.x[i], y=self.y[i], a=source.a, f=source.f) for i, source in
-                enumerate(self.sources)]
+        data = [SimulatedSourceData(x=self.x[i], y=self.y[i], a=source.a, f=source.f)
+                for i, source in enumerate(self.sources)]
         self.conn.send(data)
         # 接收数据
         self.station_datas = self.conn.recv()
         # 计算位置
         self.calculate_position()
         # 输出实际位置
-        print(f"x : {self.x}, y : {self.y}")
+        print(f"real position : x = {self.x}, y = {self.y}")
         # 输出计算位置
-        print(f"x : {self.sources[0].x}, y : {self.sources[0].y}")
+        print(f"calculated position : x = {[self.sources[i].x for i in range(len(self.sources))]}, "
+              f"y = {[self.sources[i].y for i in range(len(self.sources))]}")
 
 
 # 计算机 2 模拟器
@@ -41,15 +42,15 @@ class Computer2Simulator(StationSimulator):
 
     def simulate(self, *args: Any, **kwargs: Any):
         # 接收数据
-        self.source_data = self.conn.recv()
+        self.source_datas = self.conn.recv()
         # 计算信号
         self.calculate_signal()
         # 计算角度
-        self.calculate_theta()
+        self.calculate_thetas()
         # 发送数据
         self.conn.send(
-            [StationData(x=station.x, y=station.y, angle=station.angle, theta=station.theta) for station in
-             self.stations])
+            [StationData(x=station.x, y=station.y, angle=station.angle, theta=station.theta)
+             for station in self.stations])
 
 
 class ComputerSimulator:

@@ -4,8 +4,9 @@ from dataclasses import dataclass
 # 辐射源设置
 @dataclass
 class SourceConfig:
-    a: int | float = 0  # 振幅
-    f: int | float = 0  # 频率
+    a: int | float = 0  # 载波振幅
+    f: int | float = 0  # 载波频率
+    mode: str = 'FM'  # 调制方式
 
 
 # 辐射源运动设置
@@ -30,6 +31,7 @@ class SourceData:
 class SimulatedSourceData(SourceData):
     x: int | float = 0  # x坐标
     y: int | float = 0  # y坐标
+    mode: str = 'FM'  # 调制方式
 
 
 # 测向站设置
