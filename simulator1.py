@@ -1,4 +1,4 @@
-from radiation import SourceConfig, SourceMotionConfig, StationConfig, SourceSimulator
+from radiation import SourceConfig, SourceMotionConfig, SourceSimulator
 
 if __name__ == '__main__':
     source1_config = SourceConfig(a=10, f=2_000)
@@ -10,7 +10,7 @@ if __name__ == '__main__':
     source_simulator = SourceSimulator(source_configs=[source1_config, source2_config, source3_config],
                                        source_motion_configs=[source1_motion_config, source2_motion_config,
                                                               source3_motion_config], dt=0.5)
-    source_simulator.communication_init(timeout=10, client_ip='')
+    source_simulator.connect()
     # 计算机模拟
     while True:
         source_simulator.simulate()

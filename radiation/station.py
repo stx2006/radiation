@@ -205,11 +205,12 @@ class Station:
     def find_targets_beam(yf2):
         yfabs = (yf2 * yf2.conj()).real  # 计算频谱的幅度平方（即功率谱密度）
         yfsum = np.sum(yfabs, axis=0)  # 绝对值求和
-        yffiltered = uniform_filter(yfsum, size=5)  # 平滑处理
+        yffiltered = uniform_filter(yfsum, size=5) + 1  # 平滑处理
         yfdb = np.log10(yffiltered) * 10  # 转换为分贝（dB）
 
-        threshold = np.median(yfdb) + 20  # 设置阈值
-        peaks, _ = find_peaks(yfdb, threshold=threshold)  # 寻找峰值，返回峰值索引
+        # threshold = np.median(yfdb) + 20  # 设置阈值
+        # peaks, _ = find_peaks(yfdb, threshold=threshold)  # 寻找峰值，返回峰值索引
+        peaks, _ = find_peaks(yfdb)  # 寻找峰值，返回峰值索引
         beams = []  # 空间滤波波束
         for peak in peaks:
             beam1 = np.argmax(yfabs[:, peak])
@@ -244,17 +245,21 @@ class StationSimulator:
         self.source_datas = []  # 辐射源数据
         self.signal = None  # 阵列信号
 
-    def communication_init(self, client_ip='127.0.0.1', timeout=1, port=8080):
+    # 连接
+    def connect(self, client_ip='127.0.0.1', timeout=9999, port=8080):
         assert 1000 <= port < 65536
         self.sock = socket.socket()  # 建立套接字对象
         self.sock.settimeout(timeout)  # 设置超时时间
         self.sock.connect((client_ip, port))  # 连接到服务器
-        print(self.sock)
 
-    # 从辐射源模拟器接收数据
-    def receive_data(self):
-        serialized_data = self.sock.recv(1024)
-        self.source_datas = pickle.loads(serialized_data)
+    # 断开连接
+    def disconnect(self):
+        self.sock.close()
+
+    # 更新参数
+    def update_config(self, *args, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     # 向辐射源模拟器发送数据
     def send_data(self):
@@ -263,10 +268,50 @@ class StationSimulator:
         serialized_data = pickle.dumps(station_data)
         self.sock.sendall(serialized_data)
 
-    # 更新参数
-    def update_config(self, *args, **kwargs):
-        for key, value in kwargs.items():
-            setattr(self, key, value)
+    def calculate_signal(self):
+        # 初始化阵列信号
+        self.signal = []
+
+        # 对每个测向站
+        for station in self.stations:
+            # 生成观测信号
+            signal = self.X_t(station=station, sources=self.source_datas, noise_power=self.noise_power)
+
+            # 阵元获取数据
+            for j, element in enumerate(station.elements):
+                element.data = list(signal[j])
+
+            # 记录测向站信号
+            self.signal.append(signal)
+
+    def calculate_thetas(self):
+        # 对每个测向站
+        for i, station in enumerate(self.stations):
+            station.theta = dict()  # 更新数据
+            station.calculate_thetas(self.signal[i])
+
+    # 从辐射源模拟器接收数据
+    def receive_data(self):
+        self.sock.setblocking(True)
+        serialized_data = self.sock.recv(1024)
+        self.source_datas = pickle.loads(serialized_data)
+
+    # 输出调试信息
+    def log(self):
+        pass
+
+    # 模拟一次
+    def simulate(self):
+        # 接受辐射源数据
+        self.receive_data()
+        # 计算信号
+        self.calculate_signal()
+        # 计算角度
+        self.calculate_thetas()
+        # 发送角度数据
+        self.send_data()
+        # 输出调试信息
+        self.log()
 
     @staticmethod
     def atan2(y, x):
@@ -351,35 +396,3 @@ class StationSimulator:
             signal += _signal
         signal += self.n_t(station=station, noise_power=noise_power)
         return signal
-
-    def calculate_signal(self):
-        # 初始化阵列信号
-        self.signal = []
-
-        # 对每个测向站
-        for station in self.stations:
-            # 生成观测信号
-            signal = self.X_t(station=station, sources=self.source_datas, noise_power=self.noise_power)
-
-            # 阵元获取数据
-            for j, element in enumerate(station.elements):
-                element.data = list(signal[j])
-
-            # 记录测向站信号
-            self.signal.append(signal)
-
-    def calculate_thetas(self) -> None:
-        # 对每个测向站
-        for i, station in enumerate(self.stations):
-            station.calculate_thetas(self.signal[i])
-
-    # 模拟一次
-    def simulate(self):
-        # 接受辐射源数据
-        self.receive_data()
-        # 计算信号
-        self.calculate_signal()
-        # 计算角度
-        self.calculate_thetas()
-        # 发送角度数据
-        self.send_data()

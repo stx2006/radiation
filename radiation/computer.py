@@ -1,5 +1,6 @@
-from typing import Any
-from multiprocessing import Process, Pipe, Manager
+import pickle
+from multiprocessing import Process, Pipe
+from multiprocessing.managers import BaseManager
 from .data import SourceConfig, SourceMotionConfig, SimulatedSourceData, StationConfig, StationData
 from .source import SourceSimulator
 from .station import StationSimulator
@@ -9,76 +10,57 @@ from .station import StationSimulator
 class Computer1Simulator(SourceSimulator):
     def __init__(self, source_configs: tuple[SourceConfig] | list[SourceConfig],
                  source_motion_configs: tuple[SourceMotionConfig] | list[SourceMotionConfig],
-                 conn: Pipe, dt: int | float = 0.5):
+                 dt: int | float = 0.5):
         super().__init__(source_configs=source_configs, source_motion_configs=source_motion_configs, dt=dt)
-        self.conn = conn  # 建立管道
-
-    def simulate(self, *args: Any, **kwargs: Any):
-        # 更新位置
-        self.update_position()
-        # 发送数据
-        data = [SimulatedSourceData(x=self.x[i], y=self.y[i], a=source.a, f=source.f)
-                for i, source in enumerate(self.sources)]
-        self.conn.send(data)
-        # 接收数据
-        self.station_datas = self.conn.recv()
-        # 计算位置
-        self.calculate_position()
-        # 输出实际位置
-        print(f"real position : x = {self.x}, y = {self.y}")
-        # 输出计算位置
-        print(f"calculated position : x = {[self.sources[i].x for i in range(len(self.sources))]}, "
-              f"y = {[self.sources[i].y for i in range(len(self.sources))]}")
 
 
 # 计算机 2 模拟器
 class Computer2Simulator(StationSimulator):
     def __init__(self, station_configs: tuple[StationConfig] | list[StationConfig],
                  source_configs: tuple[SourceConfig] | list[SourceConfig],
-                 conn: Pipe, noise_power: float | tuple[float] | list[float] = 0, dt=0.5):
+                 noise_power: float | tuple[float] | list[float] = 0, dt=0.5):
         super().__init__(station_configs=station_configs, source_configs=source_configs,
                          noise_power=noise_power, dt=dt)
-        self.conn = conn  # 建立管道
-
-    def simulate(self, *args: Any, **kwargs: Any):
-        # 接收数据
-        self.source_datas = self.conn.recv()
-        # 计算信号
-        self.calculate_signal()
-        # 计算角度
-        self.calculate_thetas()
-        # 发送数据
-        self.conn.send(
-            [StationData(x=station.x, y=station.y, angle=station.angle, theta=station.theta)
-             for station in self.stations])
 
 
+class ComputerManager(BaseManager):
+    pass
+
+
+# 注册自定义管理器
+ComputerManager().register(typeid='Computer1Simulator', callable=Computer1Simulator)
+ComputerManager().register(typeid='Computer2Simulator', callable=Computer2Simulator)
+
+
+# 计算机模拟器
 class ComputerSimulator:
     def __init__(self, station_configs: tuple[StationConfig] | list[StationConfig],
                  source_configs: tuple[SourceConfig] | list[SourceConfig],
                  source_motion_configs: tuple[SourceMotionConfig] | list[SourceMotionConfig],
-                 noise_power=0, dt=0.5):
-        # 创建管道
-        computer1_conn, computer2_conn = Pipe()
-        # 创建 computer 1 和 computer 2
-        self.computer1 = Computer1Simulator(source_configs=source_configs, source_motion_configs=source_motion_configs,
-                                            conn=computer1_conn)
-        self.computer2 = Computer2Simulator(station_configs=station_configs, source_configs=source_configs,
-                                            conn=computer2_conn, noise_power=noise_power, dt=dt)
+                 noise_power: int | float = 0, dt: int | float = 0.5):
+        # 创建计算机管理器
+        computer_manager = ComputerManager()
+        computer_manager.start()
+        # 创建 computer 1
+        self.computer1 = computer_manager.Computer1Simulator(source_configs=source_configs,
+                                                             source_motion_configs=source_motion_configs)
+        # 创建 computer 2
+        self.computer2 = computer_manager.Computer2Simulator(station_configs=station_configs,
+                                                             source_configs=source_configs,
+                                                             noise_power=noise_power, dt=dt)
 
-    # 计算机 1 模拟
-    def computer1_simulate(self):
-        while True:
-            self.computer1.simulate()
-
-    # 计算机 2 模拟
-    def computer2_simulate(self):
-        while True:
-            self.computer2.simulate()
+    # 连接
+    def connect(self, computer1_args: tuple = (), computer2_args: tuple = ()):
+        process1 = Process(target=self.computer1.connect, args=computer1_args)
+        process2 = Process(target=self.computer2.connect, args=computer2_args)
+        process1.start()
+        process2.start()
+        process1.join()
+        process2.join()
 
     def simulate(self) -> None:
-        process1 = Process(target=self.computer1_simulate, args=())
-        process2 = Process(target=self.computer2_simulate, args=())
+        process1 = Process(target=self.computer1.simulate, args=())
+        process2 = Process(target=self.computer2.simulate, args=())
         process1.start()
         process2.start()
         process1.join()

@@ -15,6 +15,10 @@ class Source:
         self.x = np.inf  # x坐标
         self.y = np.inf  # y坐标
         self.time = 0  # 记录时间
+        self.x_history = []  # 记录 x 位置
+        self.y_history = []  # 记录 y 位置
+        self.calculated_x_history = []  # 记录计算出的 x 位置
+        self.calculated_y_history = []  # 记录计算出的 y 位置
 
     # 更新设置
     def update_config(self, *args, **kwargs):
@@ -39,6 +43,7 @@ class Source:
     def calculate_position(self, station_datas: tuple[StationData] | list[StationData]):
         # 判定是否有足够数据计算辐射源位置
         if station_datas is None:
+            print("Out of detection zone.")
             return self.x, self.y
         else:
             number = 0
@@ -46,6 +51,7 @@ class Source:
                 if self.f in station.theta.keys():
                     number += 1
             if number < 2:
+                print("Out of detection zone.")
                 return self.x, self.y
 
         # 构建最小二乘法所需的矩阵 A 和向量 b
@@ -74,6 +80,8 @@ class Source:
 
         self.x = x
         self.y = y
+        self.calculated_x_history.append(x)
+        self.calculated_y_history.append(y)
 
         print(f"calculated position : x = {x}, y = {y}")
 
@@ -97,27 +105,19 @@ class SourceSimulator:
         self.client = None  # 客户端
         self.station_datas = None  # 测向站数据
 
-    def communication_init(self, client_ip='127.0.0.1', timeout=1, port=8080):
+    # 连接网络
+    def connect(self, client_ip='127.0.0.1', timeout=9999, port=8080):
         assert 1000 <= port < 65536
         self.sock = socket.socket(family=socket.AF_INET, type=socket.SOCK_STREAM)  # 创建服务器端套接字对象
         self.sock.settimeout(timeout)  # 设置超时时间
         self.sock.bind((client_ip, port))  # 绑定地址
         self.sock.listen(1)  # 监听连接
         self.client, _ = self.sock.accept()  # 接受连接
-        print(self.client)
-        print(123)
 
-    # 从测向站模拟器获取数据
-    def receive_data(self):
-        serialized_data = self.client.recv(1024)
-        self.station_datas = pickle.loads(serialized_data)
-
-    # 向测向站模拟器发送数据
-    def send_data(self):
-        simulated_source_data = [SimulatedSourceData(a=source.a, f=source.f, mode=source.mode, x=self.x[i], y=self.y[i])
-                                 for i, source in enumerate(self.sources)]  # 生成辐射源模拟器数据
-        serialized_data = pickle.dumps(simulated_source_data)  # 序列化辐射源模拟器数据
-        self.client.sendall(serialized_data)  # 发送数据
+    # 断开连接
+    def disconnect(self):
+        self.sock.close()
+        self.client.close()
 
     # 更新设置
     def update_config(self, *args, **kwargs):
@@ -155,7 +155,7 @@ class SourceSimulator:
 
         new_x = []
         new_y = []
-        for i in range(len(self.sources)):
+        for i, source in enumerate(self.sources):
             motion_type = self.motion_types[i]
             speed = self.v[i] / 3.6  # 单位换算 km/s -> m/s
             if motion_type == 'linear':
@@ -176,11 +176,25 @@ class SourceSimulator:
                 raise ValueError(f'Unknown motion type: {motion_type}')
             new_x.append(new_x_i)
             new_y.append(new_y_i)
+            source.x_history.append(new_x_i)
+            source.y_history.append(new_y_i)
 
         self.x = new_x
         self.y = new_y
 
         print(f"real position : x = {self.x}, y = {self.y}")
+
+    # 向测向站模拟器发送数据
+    def send_data(self):
+        simulated_source_data = [SimulatedSourceData(a=source.a, f=source.f, mode=source.mode, x=self.x[i], y=self.y[i])
+                                 for i, source in enumerate(self.sources)]  # 生成辐射源模拟器数据
+        serialized_data = pickle.dumps(simulated_source_data)  # 序列化辐射源模拟器数据
+        self.client.sendall(serialized_data)  # 发送数据
+
+    # 从测向站模拟器获取数据
+    def receive_data(self):
+        serialized_data = self.client.recv(1024)
+        self.station_datas = pickle.loads(serialized_data)
 
     # 计算位置
     def calculate_position(self):
@@ -188,6 +202,10 @@ class SourceSimulator:
         for source in self.sources:
             # 计算位置
             source.calculate_position([station_data for station_data in self.station_datas])
+
+    # 输出调试信息
+    def log(self):
+        pass
 
     def simulate(self):
         # 更新位置
@@ -198,3 +216,5 @@ class SourceSimulator:
         self.receive_data()
         # 计算位置
         self.calculate_position()
+        # 输出调试信息
+        self.log()

@@ -15,8 +15,8 @@ class SourceMotionConfig:
     x: int | float = 0  # 初始 x 坐标
     y: int | float = 0  # 初始 y 坐标
     v: int | float = 0  # 速度
-    motion_type: str = "circular"
     r: None | int | float = 0
+    motion_type: str = "linear"  # 运动类型
 
 
 # 辐射源数据
