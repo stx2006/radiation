@@ -77,7 +77,8 @@ class MainWindow(QMainWindow):
     def initWindow(self):
         self.setWindowTitle("外辐射源定位系统模拟(辐射源端)")
         self.setWindowIcon(QIcon('src/icon.png'))
-        self.setGeometry(100, 100, 2400, 1200)
+        screen_geometry = QApplication.desktop().screenGeometry()
+        self.setGeometry(0, 100, screen_geometry.width() // 2, screen_geometry.height() - 200)
 
     # 初始化工具栏
     def initToolBar(self):
@@ -382,13 +383,15 @@ class MainWindow(QMainWindow):
             series.attachAxis(self.chart.axisX)
             series.attachAxis(self.chart.axisY)
 
-        # self.chart.createDefaultAxes()
-
     # 主选项卡函数
     # 增加辐射源
     def addSource(self):
         self.source_count += 1  # 辐射源数量 + 1
         object_name = f"Source {self.source_count}"
+
+        # 添加到树形结构
+        QTreeWidgetItem(self.source_tree, [object_name])
+
         group_box = QGroupBox(object_name)  # 创建新的分组框
         source_layout = QFormLayout()  # 创建新布局
 

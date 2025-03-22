@@ -27,7 +27,9 @@ class Station:
     carrier_f = 25_000_000  # 载波频率 25 MHz
     carrier_wavelength = 12  # 载波波长 12 m
 
-    def __init__(self, station_config: StationConfig, source_configs: tuple[SourceConfig] | list[SourceConfig]):
+    def __init__(self, station_config: StationConfig, source_configs: tuple[SourceConfig] | list[SourceConfig],
+                 number: int = 0):
+        self.number = number  # 测向站编号
         self.x = station_config.x  # x坐标
         self.y = station_config.y  # y坐标
         self.angle = station_config.angle  # 角度(弧度)
@@ -73,7 +75,7 @@ class Station:
             b = (y1 - y2) / (y1 + y2)  # 计算 b
             theta = self.calculate_theta(b, w1, w2, beam_a[beam[0]], beam_a[beam[1]])[0]  # 解方程算角度
             self.theta[peak * self.sample_rate / self.m] = theta  # 记录角度(f = k * sample_rate / n)
-            print(f"calculated angle = {theta}")
+        print(f"station {self.number} calculated angle : {self.theta}")
 
     # 计算a(θ)
     def a_theta(self, az: float | np.ndarray = 0):
@@ -237,7 +239,7 @@ class StationSimulator:
                  source_configs: tuple[SourceConfig] | list[SourceConfig],
                  noise_power: int | float = 0.5, dt: int | float = 0.5):
         # 添加测向站
-        self.stations = [Station(station_config, source_configs) for station_config in station_configs]
+        self.stations = [Station(station_config, source_configs, i) for i, station_config in enumerate(station_configs)]
         self.source_number = len(source_configs)  # 辐射源数量
         self.noise_power = noise_power  # 噪声功率
         self.dt = dt  # 仿真时间间隔
@@ -283,6 +285,17 @@ class StationSimulator:
 
             # 记录测向站信号
             self.signal.append(signal)
+
+            # 动态可视化信号
+            # plt.close('all')
+            for j in range(signal.shape[0]):
+                plt.plot(np.real(signal[j]), label=f'Element {j} Real')
+                plt.plot(np.imag(signal[j]), label=f'Element {j} Imag')
+            plt.title(f'Station {station.number} Signal')
+            plt.legend()
+            plt.xlabel('Sample Index')
+            plt.ylabel('Signal Amplitude')
+            plt.show()
 
     def calculate_thetas(self):
         # 对每个测向站
@@ -350,7 +363,8 @@ class StationSimulator:
 
     # 计算方向矢量 A(θ)
     def A_theta(self, theta: np.array, n: int = 8, d: float = 6) -> np.ndarray:
-        return np.exp(2j * np.pi * np.arange(n).reshape((-1, 1)) * d * np.sin(theta.reshape((1, -1))) / self.carrier_wavelength)
+        return np.exp(
+            2j * np.pi * np.arange(n).reshape((-1, 1)) * d * np.sin(theta.reshape((1, -1))) / self.carrier_wavelength)
 
     # 计算信号 s(t)
     @classmethod

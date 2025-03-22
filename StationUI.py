@@ -4,6 +4,7 @@ import webbrowser
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 from PyQt5.QtCore import *
+from PyQt5.QtChart import QChart, QChartView, QLineSeries, QValueAxis
 from radiation import *
 
 
@@ -91,7 +92,8 @@ class MainWindow(QMainWindow):
     def initWindow(self):
         self.setWindowTitle("外辐射源定位系统模拟(测向站端)")
         self.setWindowIcon(QIcon('src/icon.png'))
-        self.setGeometry(100, 100, 2400, 1200)
+        screen_geometry = QApplication.desktop().screenGeometry()
+        self.setGeometry(screen_geometry.width() // 2, 100, screen_geometry.width() // 2, screen_geometry.height() - 200)
 
     # 初始化工具栏
     def initToolBar(self):
@@ -369,11 +371,12 @@ class MainWindow(QMainWindow):
 
     # 开始仿真
     def startSimulation(self):
-        self.timer.start(1000)  # 每秒调用一次 simulate 方法
+        self.timer.start(int(500 * self.dt))  # 每秒调用一次 simulate 方法
 
     # 运行仿真
     def runSimulation(self):
         self.station_simulator.simulate()
+        self.updateStationData()  # 更新测向站数据
 
     # 停止仿真
     def stopSimulation(self):
@@ -418,6 +421,15 @@ class MainWindow(QMainWindow):
         source_scroll_area.setWidget(source_content)
         tab_layout.addWidget(QLabel("Sources"))
         tab_layout.addWidget(source_scroll_area)
+
+    # 更新测向站数据
+    def updateStationData(self):
+        for i in range(self.station_tree.topLevelItemCount()):
+            station_item = self.station_tree.topLevelItem(i)
+            station = self.station_simulator.stations[i]
+            station_item.takeChildren()  # 清空子项
+            for freq, angle in station.theta.items():
+                QTreeWidgetItem(station_item, [f"频率: {freq} Hz, 角度: {angle}°"])
 
     # 增加测向站
     def addStation(self):
@@ -476,8 +488,16 @@ class MainWindow(QMainWindow):
         row4_layout.addWidget(t)
         station_layout.addRow(row4_layout)
 
+        # 数据显示框
+        data_display = QTextEdit()
+        data_display.setReadOnly(True)
+        station_layout.addRow(QLabel("数据"), data_display)
+
         group_box.setLayout(station_layout)
         self.station_layout.addWidget(group_box)
+
+        # 添加到树形结构
+        QTreeWidgetItem(self.station_tree, [object_name])
 
     # 减少测向站
     def removeStation(self):

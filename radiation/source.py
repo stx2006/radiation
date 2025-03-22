@@ -4,6 +4,7 @@ import struct
 import numpy as np
 from scipy.constants import c
 from .data import SourceConfig, SourceMotionConfig, SourceData, SimulatedSourceData, StationData
+import matplotlib.pyplot as plt
 
 
 # 辐射源
@@ -83,8 +84,6 @@ class Source:
         self.calculated_x_history.append(x)
         self.calculated_y_history.append(y)
 
-        print(f"calculated position : x = {x}, y = {y}")
-
         return self.x, self.y
 
 
@@ -99,6 +98,8 @@ class SourceSimulator:
         self.motion_types = [source_motion_config.motion_type for source_motion_config in source_motion_configs]  # 运动类型
         self.v = [source_motion_config.v for source_motion_config in source_motion_configs]  # 每个辐射源的速度
         self.r = [source_motion_config.r for source_motion_config in source_motion_configs]  # 每个辐射源的半径（如果是圆周运动）
+        self.center_x = [config.x for config in source_motion_configs]
+        self.center_y = [config.y for config in source_motion_configs]
         self.t = 0  # 当前时间
         self.dt = dt  # 模拟间隔时间
         self.sock = None  # 套接字
@@ -131,6 +132,8 @@ class SourceSimulator:
                 self.motion_types = [config.motion_type for config in source_motion_configs]
                 self.v = [config.v for config in source_motion_configs]
                 self.r = [config.r for config in source_motion_configs]
+                self.center_x = [config.x for config in source_motion_configs]
+                self.center_y = [config.y for config in source_motion_configs]
             if len(args) >= 3 and args[2]:
                 self.dt = args[2]
 
@@ -150,28 +153,24 @@ class SourceSimulator:
     def update_position(self):
         """更新dt秒后的位置、幅度和频率"""
         # 更新时间
-        print(f"now time = {self.t}")
         self.t += self.dt
 
         new_x = []
         new_y = []
         for i, source in enumerate(self.sources):
             motion_type = self.motion_types[i]
-            speed = self.v[i] / 3.6  # 单位换算 km/s -> m/s
+            speed = self.v[i] / 1e3  # 单位换算 km/h -> km/s
             if motion_type == 'linear':
                 # 假设x方向运动
                 new_x_i = self.x[i] + speed * self.dt
                 new_y_i = self.y[i]
             elif motion_type == 'circular':
                 radius = self.r[i]
-                # 圆弧运动实现
+                # 圆弧运动实现，以 (x, y) 处为圆心
                 omega = speed / radius
-                # 计算新的x和y坐标，不依赖self.thetas
-                delta_theta = omega * self.dt
-                cos_delta_theta = np.cos(delta_theta)
-                sin_delta_theta = np.sin(delta_theta)
-                new_x_i = self.x[i] * cos_delta_theta - self.y[i] * sin_delta_theta
-                new_y_i = self.x[i] * sin_delta_theta + self.y[i] * cos_delta_theta
+                delta_theta = omega * self.t
+                new_x_i = self.center_x[i] + radius * np.cos(delta_theta)
+                new_y_i = self.center_y[i] - radius * np.sin(delta_theta)
             else:
                 raise ValueError(f'Unknown motion type: {motion_type}')
             new_x.append(new_x_i)
@@ -181,8 +180,6 @@ class SourceSimulator:
 
         self.x = new_x
         self.y = new_y
-
-        print(f"real position : x = {self.x}, y = {self.y}")
 
     # 向测向站模拟器发送数据
     def send_data(self):
@@ -205,7 +202,56 @@ class SourceSimulator:
 
     # 输出调试信息
     def log(self):
-        pass
+        # 输出时间
+        print(f"now time = {self.t}")
+        # 输出真实坐标
+        print("real position:")
+        real_position = zip(self.x, self.y)
+        for i, (x, y) in enumerate(real_position):
+            print(f"{self.sources[i].f} : x = {x}, y = {y}")
+        # 输出计算坐标
+        print("calculated position:")
+        for source in self.sources:
+            print(f"{source.f} : x = {source.x}, y = {source.y}")
+
+        # 计算误差
+        print("position error:")
+        for i, source in enumerate(self.sources):
+            error_x = abs(self.x[i] - source.x)
+            error_y = abs(self.y[i] - source.y)
+            print(f"{source.f} : error_x = {error_x}, error_y = {error_y}")
+
+        # 动态显示辐射源的真实位置和计算位置，并保留路径
+        # plt.close('all')
+        # for i, source in enumerate(self.sources):
+        #     plt.plot(source.x_history, source.y_history, 'b-')
+        #     plt.plot(source.calculated_x_history, source.calculated_y_history, 'r--')
+        #     plt.scatter(source.x_history, source.y_history, color='blue')
+        #     plt.scatter(source.calculated_x_history, source.calculated_y_history, color='red')
+        # plt.plot([], [], 'b-', label='Real Path')
+        # plt.plot([], [], 'r--', label='Calculated Path')
+        # plt.scatter([], [], color='blue', label='Real Position')
+        # plt.scatter([], [], color='red', label='Calculated Position')
+        # plt.title('Real vs Calculated Positions')
+        # plt.xlim(-100, 100)  # 设置x轴范围
+        # plt.ylim(-100, 100)  # 设置y轴范围
+        # plt.grid(True)  # 显示网格
+        # plt.legend()
+        # plt.xlabel('X Position')
+        # plt.ylabel('Y Position')
+        # plt.show()
+        if len(self.sources[0].x_history) % 10 == 0:
+            plt.plot(self.sources[0].x_history, self.sources[0].y_history, 'b-')
+            plt.plot(self.sources[0].calculated_x_history, self.sources[0].calculated_y_history, 'r--')
+            plt.scatter(self.sources[0].x_history, self.sources[0].y_history, color='blue')
+            plt.scatter(self.sources[0].calculated_x_history, self.sources[0].calculated_y_history, color='red')
+            plt.title('Real vs Calculated Positions')
+            plt.xlim(-100, 100)
+            plt.ylim(-100, 100)
+            plt.grid(True)
+            plt.xlabel('X Position')
+            plt.ylabel('Y Position')
+            plt.show()
 
     def simulate(self):
         # 更新位置
