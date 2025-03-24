@@ -291,12 +291,12 @@ class MainWindow(QMainWindow):
                                 parameters[label_text] = widget.currentText()
                 source_configs.append(SourceConfig(*list(parameters.values())[:2]))
                 source_motion_configs.append(SourceMotionConfig(*list(parameters.values())[2:]))
-        self.source_simulator = SourceSimulator(source_configs, source_motion_configs)
+        self.source_simulator = SourceSimulator(source_configs, source_motion_configs, dt=self.dt)  # 创建辐射源模拟器
         QMessageBox.information(self, "应用设置", "设置成功！")
         
     # 开始仿真
     def startSimulation(self):
-        self.timer.start(int(1000 * self.dt))  # 固定时间调用一次 runSimulation
+        self.timer.start(100)  # 固定时间调用一次 runSimulation
 
     # 停止仿真
     def stopSimulation(self):
@@ -357,11 +357,11 @@ class MainWindow(QMainWindow):
 
         # 固定 x，y 轴的大小范围在 -100 到 100 之间
         self.chart.axisX = QValueAxis()
-        self.chart.axisX.setRange(-100, 100)
+        self.chart.axisX.setRange(-50, 50)
         self.chart.axisX.setTitleText("X Position (km)")
 
         self.chart.axisY = QValueAxis()
-        self.chart.axisY.setRange(-100, 100)
+        self.chart.axisY.setRange(-50, 50)
         self.chart.axisY.setTitleText("Y Position (km)")
 
         self.chart.addAxis(self.chart.axisX, Qt.AlignBottom)
@@ -374,14 +374,22 @@ class MainWindow(QMainWindow):
         colors = [Qt.red, Qt.green, Qt.blue, Qt.yellow, Qt.cyan, Qt.magenta]  # 预定义颜色列表
 
         for i, source in enumerate(self.source_simulator.sources):
-            series = QLineSeries()
-            series.setName(f'Source {i}')
-            series.setColor(colors[i % len(colors)])  # 使用不同颜色标注不同辐射源的不同轨迹
+            series_real = QLineSeries()
+            series_calculated = QLineSeries()
+            series_real.setName(f'Source {i} (Real)')
+            series_calculated.setName(f'Source {i} (Calculated)')
+            series_real.setColor(colors[i % len(colors)])  # 使用不同颜色标注不同辐射源的不同轨迹
+            series_calculated.setColor(colors[(i + 1) % len(colors)])  # 使用不同颜色标注不同辐射源的不同轨迹
             for x, y in zip(source.x_history, source.y_history):
-                series.append(x, y)
-            self.chart.addSeries(series)
-            series.attachAxis(self.chart.axisX)
-            series.attachAxis(self.chart.axisY)
+                series_real.append(x, y)
+            for x, y in zip(source.calculated_x_history, source.calculated_y_history):
+                series_calculated.append(x, y)
+            self.chart.addSeries(series_real)
+            self.chart.addSeries(series_calculated)
+            series_real.attachAxis(self.chart.axisX)
+            series_real.attachAxis(self.chart.axisY)
+            series_calculated.attachAxis(self.chart.axisX)
+            series_calculated.attachAxis(self.chart.axisY)
 
     # 主选项卡函数
     # 增加辐射源

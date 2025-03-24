@@ -7,9 +7,9 @@ if __name__ == '__main__':
     source2_config = SourceConfig(a=8, f=3_200)
     source3_config = SourceConfig(a=6, f=2_800)
     station_simulator = StationSimulator(station_configs=[station1_config, station2_config],
-                                        source_configs=[source1_config, source2_config, source3_config],
-                                        noise_power=0, dt=0.5)
-    station_simulator.connect()
+                                         source_configs=[source1_config, source2_config, source3_config],
+                                         noise_power=0, dt=0.5)
+    station_simulator.connect(client_ip='192.168.43.200')
     # 计算机模拟
     while True:
         station_simulator.simulate()

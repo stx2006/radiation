@@ -4,7 +4,6 @@ import webbrowser
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 from PyQt5.QtCore import *
-from PyQt5.QtChart import QChart, QChartView, QLineSeries, QValueAxis
 from radiation import *
 
 
@@ -93,7 +92,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("外辐射源定位系统模拟(测向站端)")
         self.setWindowIcon(QIcon('src/icon.png'))
         screen_geometry = QApplication.desktop().screenGeometry()
-        self.setGeometry(screen_geometry.width() // 2, 100, screen_geometry.width() // 2, screen_geometry.height() - 200)
+        self.setGeometry(screen_geometry.width() // 2, 100, screen_geometry.width() // 2,
+                         screen_geometry.height() - 200)
 
     # 初始化工具栏
     def initToolBar(self):
@@ -363,15 +363,13 @@ class MainWindow(QMainWindow):
                             elif isinstance(widget, QSpinBox):
                                 parameters[label_text] = widget.value()
                 source_configs.append(SourceConfig(*parameters.values()))
-        self.station_simulator = StationSimulator(station_configs=station_configs,
-                                                                            source_configs=source_configs,
-                                                                            noise_power=self.noise_power,
-                                                                            dt=self.dt)  # 创建辐射源模拟器
+        self.station_simulator = StationSimulator(station_configs=station_configs, source_configs=source_configs,
+                                                  noise_power=self.noise_power, dt=self.dt)  # 创建辐射源模拟器
         QMessageBox.information(self, "应用设置", "设置成功！")
 
     # 开始仿真
     def startSimulation(self):
-        self.timer.start(int(500 * self.dt))  # 每秒调用一次 simulate 方法
+        self.timer.start(100)  # 每 0.1s 调用一次 simulate 方法
 
     # 运行仿真
     def runSimulation(self):
