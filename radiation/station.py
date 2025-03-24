@@ -286,16 +286,16 @@ class StationSimulator:
             # 记录测向站信号
             self.signal.append(signal)
 
-            # 动态可视化信号
-            # plt.close('all')
-            for j in range(signal.shape[0]):
-                plt.plot(np.real(signal[j]), label=f'Element {j} Real')
-                plt.plot(np.imag(signal[j]), label=f'Element {j} Imag')
-            plt.title(f'Station {station.number} Signal')
-            plt.legend()
-            plt.xlabel('Sample Index')
-            plt.ylabel('Signal Amplitude')
-            plt.show()
+            # # 动态可视化信号
+            # # plt.close('all')
+            # for j in range(signal.shape[0]):
+            #     plt.plot(np.real(signal[j]), label=f'Element {j} Real')
+            #     plt.plot(np.imag(signal[j]), label=f'Element {j} Imag')
+            # plt.title(f'Station {station.number} Signal')
+            # plt.legend()
+            # plt.xlabel('Sample Index')
+            # plt.ylabel('Signal Amplitude')
+            # plt.show()
 
     def calculate_thetas(self):
         # 对每个测向站

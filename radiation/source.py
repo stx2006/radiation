@@ -221,13 +221,13 @@ class SourceSimulator:
             error_y = abs(self.y[i] - source.y)
             print(f"{source.f} : error_x = {error_x}, error_y = {error_y}")
 
-        # 动态显示辐射源的真实位置和计算位置，并保留路径
+        # # 动态显示辐射源的真实位置和计算位置，并保留路径
         # plt.close('all')
         # for i, source in enumerate(self.sources):
-        #     plt.plot(source.x_history, source.y_history, 'b-')
-        #     plt.plot(source.calculated_x_history, source.calculated_y_history, 'r--')
-        #     plt.scatter(source.x_history, source.y_history, color='blue')
-        #     plt.scatter(source.calculated_x_history, source.calculated_y_history, color='red')
+        #     plt.plot(np.array(source.x_history), np.array(source.y_history), 'b-')
+        #     plt.scatter(np.array(source.x_history), np.array(source.y_history), color='blue')
+        #     plt.plot(np.array(source.calculated_x_history), np.array(source.calculated_y_history), 'r--')
+        #     plt.scatter(np.array(source.calculated_x_history), np.array(source.calculated_y_history), color='red')
         # plt.plot([], [], 'b-', label='Real Path')
         # plt.plot([], [], 'r--', label='Calculated Path')
         # plt.scatter([], [], color='blue', label='Real Position')
@@ -240,18 +240,19 @@ class SourceSimulator:
         # plt.xlabel('X Position')
         # plt.ylabel('Y Position')
         # plt.show()
-        if len(self.sources[0].x_history) % 10 == 0:
-            plt.plot(self.sources[0].x_history, self.sources[0].y_history, 'b-')
-            plt.plot(self.sources[0].calculated_x_history, self.sources[0].calculated_y_history, 'r--')
-            plt.scatter(self.sources[0].x_history, self.sources[0].y_history, color='blue')
-            plt.scatter(self.sources[0].calculated_x_history, self.sources[0].calculated_y_history, color='red')
-            plt.title('Real vs Calculated Positions')
-            plt.xlim(-100, 100)
-            plt.ylim(-100, 100)
-            plt.grid(True)
-            plt.xlabel('X Position')
-            plt.ylabel('Y Position')
-            plt.show()
+
+        # if len(self.sources[0].x_history) % 10 == 0:
+        #     plt.plot(self.sources[0].x_history, self.sources[0].y_history, 'b-')
+        #     plt.plot(self.sources[0].calculated_x_history, self.sources[0].calculated_y_history, 'r--')
+        #     plt.scatter(self.sources[0].x_history, self.sources[0].y_history, color='blue')
+        #     plt.scatter(self.sources[0].calculated_x_history, self.sources[0].calculated_y_history, color='red')
+        #     plt.title('Real vs Calculated Positions')
+        #     plt.xlim(-100, 100)
+        #     plt.ylim(-100, 100)
+        #     plt.grid(True)
+        #     plt.xlabel('X Position')
+        #     plt.ylabel('Y Position')
+        #     plt.show()
 
     def simulate(self):
         # 更新位置
